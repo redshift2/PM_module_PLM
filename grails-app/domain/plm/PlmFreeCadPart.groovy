@@ -11,7 +11,7 @@ import taack.domain.IEnumTransition2
 
 @CompileStatic
 enum PlmFreeCadPartStatus implements IEnumTransition2<User> {
-    CREATED, FREE, LOCKED, OBSOLETE, WIP, CHECKED_OUT, RELEASED
+    CREATED, FREE, LOCKED, OBSOLETE
 
     @Override
     IEnumTransition2[] transitionsTo(User user) {
