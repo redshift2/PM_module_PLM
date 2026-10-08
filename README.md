@@ -1,5 +1,8 @@
-Server installation (Linux/Mac):
-# Bare Metal Installation
+# Welcome to Parts Manager PLM
+Parts Management done right, made by engineers for engineers
+
+# Server installation (Linux/Mac):
+## Bare Metal Installation
 
 Download the server
 ```bash
@@ -17,7 +20,7 @@ Launch it:
 $ java -jar server-0.6.jar
 ```
 
-# Build From Source
+## Build From Source
 ```SH
  $ mkdir parts-manager
  $ cd parts-manager
@@ -31,7 +34,7 @@ $ java -jar server-0.6.jar
  $ cd ..
 ```
  
-# Docker
+## Docker
 This assumes that you have a working docker installation, see this web page for docker installation https://docs.docker.com/engine/install/
 
 Download the ***docker-compose.yml*** file or copy it from below and adjust the paths and port to suit your needs
@@ -80,4 +83,5 @@ $ sudo docker compose up -d
 ```
 
 
-You are done, access the server [http://localhost:9442/](http://localhost:9442/), connect with `admin` / `ChangeIt` credentials.
+# You are done
+access the server [http://localhost:9442/](http://localhost:9442/), connect with `admin` / `ChangeIt` credentials.
