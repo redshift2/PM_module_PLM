@@ -3,7 +3,7 @@ Server installation (Linux/Mac):
 
 Download the server
 ```bash
-$ wget https://github.com/Taack/plm/releases/download/v2026.10.06/server-0.6.jar
+$ wget https://github.com/redshift2/Parts_Manager_PLM/releases/download/v1/server-0.6.jar
 ```
 
 Check Java version > 25:
@@ -67,7 +67,7 @@ services:
 
 Download the server to the same location as the docker-compose.yml file
 ```bash
-$ wget https://github.com/Taack/plm/releases/download/v2026.10.06/server-0.6.jar
+$ wget https://github.com/redshift2/Parts_Manager_PLM/releases/download/v1/server-0.6.jar
 ```
 Build the docker image
 ```bash
