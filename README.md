@@ -45,8 +45,8 @@ services:
       HOST_URL: http://<server ip>:<port>   #set the server domain name. Port is not required if using a reverse proxy
                                             #examples https://taackplm.org http://taackplm.org:9442 or 192.168.1.20:9442
     volumes:
-      - ./taack-plm/database:/database
-      - ./taack-plm/vault:/root/intranetFilesDev
+      - ./partsmanager-plm/database:/database
+      - ./partsmanager-plm/vault:/root/intranetFilesDev
 
 ```
 
