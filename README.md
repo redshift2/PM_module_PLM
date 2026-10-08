@@ -16,6 +16,21 @@ Launch it:
 ```bash
 $ java -jar server-0.6.jar
 ```
+
+# Build From Source
+```SH
+ $ mkdir parts-manager
+ $ cd parts-manager
+ $ git clone https://github.com/redshift2/Parts_Manager_PLM.git
+ $ git clone https://github.com/redshift2/Parts_manager_intranet_module.git
+ $ cd Parts_manager_intranet_module/app/
+ $ ln -s ../../Parts_Manager_PLM plm
+ $ cd ..
+ $ ./gradlew bootJar
+ $ cp server/build/libs/server-0.6.jar ..
+ $ cd ..
+```
+ 
 # Docker
 This assumes that you have a working docker installation, see this web page for docker installation https://docs.docker.com/engine/install/
 
