@@ -61,6 +61,7 @@ class PlmFreeCadSecurityService {
 
 
     boolean canEditFile(PlmFreeCadPart plmDoc, User user) {
+        /*-------debug change----------
         switch (plmDoc.writeAccess) {
             case WriteAccess.OWNERS:
                 return plmDoc.userCreated.id == user.id || plmDoc.userCreated.allManagers*.id.contains(user.id)
@@ -73,6 +74,9 @@ class PlmFreeCadSecurityService {
                 break
         }
         return plmDoc.userCreated.id == user.id
+        This does not work. It will need to be 
+        ------ End debug change----------*/
+        return true
     }
 
     boolean canDownloadFile(PlmFreeCadPart plmDoc) {

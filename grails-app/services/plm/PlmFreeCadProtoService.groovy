@@ -125,6 +125,18 @@ class PlmFreeCadProtoService {
                 return outbound.build()
             } else {
                 PlmFreeCadPart partToBeCloned = PlmFreeCadPart.findByFileIdAndNextVersionIsNull(plmFile.id)
+                /* ----- Debug start ------ */
+                log.info(
+                    "PLM upload identity check: " +
+                    "name=${plmFile.name}, " +
+                    "fileName=${plmFile.fileName}, " +
+                    "incomingId=${plmFile.id}, " +
+                    "sha1=${sha1}, " +
+                    "existingPartBySha=${existingPart?.id}, " +
+                    "existingPartByFileId=${partToBeCloned?.id}, " +
+                    "currentUser=${u?.id}"
+                )
+                /*---- End debug ----------- */
                 if (partToBeCloned?.status == PlmFreeCadPartStatus.LOCKED) {
                     log.error "Attempt to update Locked Part (from id): ${plmFile.id} $partToBeCloned"
                     return outbound.build()
