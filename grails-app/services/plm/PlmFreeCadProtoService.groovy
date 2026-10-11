@@ -65,6 +65,7 @@ class PlmFreeCadProtoService {
         return outbound.build()
     }
 
+
     FreecadPlm.Bucket processZip(ZipFile zipFile) {
         FreecadPlm.Bucket.Builder outbound = FreecadPlm.Bucket.newBuilder()
         outbound.setStatus(FreecadPlm.ServerStatus.NOK_FILES)
@@ -149,8 +150,12 @@ class PlmFreeCadProtoService {
                     if (!partToBeCloned) {
                         partToBeCloned = new PlmFreeCadPart()
                         partToBeCloned.userCreated = u
-                        partToBeCloned.documentCategory = new DocumentCategory(category: DocumentCategoryEnum.OTHER)
-                    } else {
+                        partToBeCloned.documentCategory =
+                            new DocumentCategory(category: DocumentCategoryEnum.OTHER)
+
+                        partToBeCloned.creationOrder = Long.MAX_VALUE
+                    }
+                    else {
                         PlmFreeCadPart oldPart = partToBeCloned.cloneDirectObjectData()
                         partToBeCloned.plmLinks?.each { PlmFreeCadLink lIt ->
                             oldPart.addToPlmLinks(lIt)
