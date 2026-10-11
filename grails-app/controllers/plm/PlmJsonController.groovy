@@ -60,7 +60,7 @@ class PlmJsonController {
 
         Map<String, Object> result = [
                 serverBuild             : getServerBuildDate(),
-                messagingProtocolVersion: "3",
+                messagingProtocolVersion: "4",
                 maximumFileUploadSize   : maximumFileUploadSize,
                 maxRequestSize          : maximumRequestSize
         ] as Map<String, Object>
@@ -238,7 +238,10 @@ def workspaceParts() {
 }
 
     //create endpoint for searching for parts, exposes /plmJson/searchParts?originalName=
+    @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
+  // Search for parts, exposes /plmJson/searchParts?originalName=
     def searchParts(String originalName) {
+
         if (!originalName?.trim()) {
             response.status = 400
             render([
@@ -264,7 +267,50 @@ def workspaceParts() {
                 ]
         ) as List<PlmFreeCadPart>
 
+        User user = springSecurityService.currentUser as User
+
+        List<Map<String, Object>> results = parts.findAll { PlmFreeCadPart part ->
+            plmFreeCadSecurityService.canDownloadFile(part, user)
+        }.collect { PlmFreeCadPart part ->
+
+            List<Long> tagIds = []
+
+            if (part.documentCategory) {
+                tagIds = Term.executeQuery(
+                        '''
+                        select distinct t.id
+                        from DocumentCategory dc
+                        join dc.tags t
+                        where dc.id = :categoryId
+                        order by t.id
+                        ''',
+                        [categoryId: part.documentCategory.id]
+                ) as List<Long>
+            }
+
+            [
+                    id                : part.id,
+                    computedVersion   : part.computedVersion,
+                    active            : part.active,
+                    nextVersionId     : part.nextVersion?.id,
+                    originalName      : part.originalName,
+                    label             : part.label,
+                    fileId            : part.fileId,
+                    plmContentShaOne  : part.plmContentShaOne,
+                    plmFileUserCreated: part.plmFileUserCreated,
+                    plmFileUserUpdated: part.plmFileUserUpdated,
+                    comment           : part.comment,
+                    commentVersion    : part.commentVersion,
+                    status            : part.status?.name(),
+                    lockedBy          : part.lockedBy ? [
+                            id      : part.lockedBy.id,
+                            username: part.lockedBy.username
+                    ] : null,
+                    tagId             : tagIds
+            ] as Map<String, Object>
+        }
+
         response.contentType = 'application/json'
-        render prepareParts(parts, springSecurityService.currentUser as User) as JSON
+        render results as JSON
     }
 }
