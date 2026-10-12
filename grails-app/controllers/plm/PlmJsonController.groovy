@@ -8,6 +8,7 @@ import grails.plugin.springsecurity.SpringSecurityService
 import grails.plugin.springsecurity.annotation.Secured
 import org.springframework.beans.factory.annotation.Value
 import grails.gorm.transactions.Transactional
+import attachment.DocumentCategory
 
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
@@ -55,84 +56,7 @@ class PlmJsonController {
 
         return buildDate
     }
-    // ---------------------------------------------------------
-    // Set tags assigned to a PLM part
-    //
-    // POST /plmJson/setPartTags
-    // ---------------------------------------------------------
 
-    @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
-    @Transactional
-    def setPartTags() {
-
-        Map<String, Object> requestJson =
-                request.JSON as Map<String, Object>
-
-        Long partId = requestJson.get("partId") as Long
-
-        List tagIds = requestJson.get("tagIds") as List
-
-        if (partId == null || tagIds == null) {
-            render(
-                status: 400,
-                contentType: "application/json",
-                text: '{"error":"partId and tagIds are required"}'
-            )
-            return
-        }
-
-        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
-
-        if (part == null) {
-            render(
-                status: 404,
-                contentType: "application/json",
-                text: '{"error":"Part not found"}'
-            )
-            return
-        }
-
-        User user = springSecurityService.currentUser as User
-
-        // IMPORTANT:
-        // Validate write permission here using the appropriate
-        // method in PlmFreeCadSecurityService.
-        // Download permission alone is not sufficient.
-
-        List<Long> requestedIds =
-                tagIds.collect { Object id -> id as Long }.unique()
-
-        List<Term> tags = requestedIds.collect { Long id ->
-            Term.get(id)
-        }
-
-        if (tags.any { Term tag -> tag == null }) {
-            render(
-                status: 400,
-                contentType: "application/json",
-                text: '{"error":"One or more tag IDs are invalid"}'
-            )
-            return
-        }
-
-        // Replace the existing tags.
-        // Adjust this line to match the actual domain relationship.
-        part.dc.tags.clear()
-
-        tags.each { Term tag ->
-            part.dc.tags.add(tag)
-        }
-
-        part.save(flush: true, failOnError: true)
-
-        render(
-            [
-                success: true,
-                partId : part.id,
-                tagIds : requestedIds
-            ] as JSON
-        )
-    }
 
 
     // Endpoint: /plmJson/serverInfo
@@ -167,7 +91,7 @@ class PlmJsonController {
         render result as JSON
     }
 
-    //Create end point  /plmJson/partsByTag?tagId= 
+    //Create end point  /plmJson/partsByTag?tagId=
     def partsByTag(Long tagId) {
         if (!tagId) {
             response.status = 400
@@ -316,7 +240,146 @@ def workspaceParts() {
             parts: resultParts
     ] as JSON)
 }
+    // ---------------------------------------------------------
+    // Assign tags to a PLM part
+    //
+    // POST /plmJson/setPartTags
+    //
+    // JSON:
+    // {
+    //     "partId": 160,
+    //     "tagIds": [10, 13, 37]
+    // }
+    // ---------------------------------------------------------
 
+    @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
+    @Transactional
+    def setPartTags() {
+
+        Map<String, Object> requestJson =
+                request.JSON as Map<String, Object>
+
+        Long partId = requestJson.get("partId") as Long
+
+        List<Object> tagIds =
+                requestJson.get("tagIds") as List<Object>
+
+        if (partId == null || tagIds == null) {
+
+            response.status = 400
+
+            render([
+                    success: false,
+                    error  : "partId and tagIds are required"
+            ] as JSON)
+
+            return
+        }
+
+        // -----------------------------------------------------
+        // Find PLM part
+        // -----------------------------------------------------
+
+        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
+
+        if (part == null) {
+
+            response.status = 404
+
+            render([
+                    success: false,
+                    error  : "PLM part not found",
+                    partId : partId
+            ] as JSON)
+
+            return
+        }
+
+        // -----------------------------------------------------
+        // Resolve requested tags
+        // -----------------------------------------------------
+
+        List<Long> requestedIds = tagIds.collect {
+            Object id -> id as Long
+        }.unique()
+
+        List<Term> tags = []
+
+        for (Long tagId : requestedIds) {
+
+            Term tag = Term.get(tagId)
+
+            if (tag == null) {
+
+                response.status = 400
+
+                render([
+                        success: false,
+                        error  : "Invalid tag ID",
+                        tagId  : tagId
+                ] as JSON)
+
+                return
+            }
+
+            tags.add(tag)
+        }
+
+        // -----------------------------------------------------
+        // Get or create DocumentCategory
+        // -----------------------------------------------------
+
+        DocumentCategory category = part.documentCategory
+
+        if (category == null) {
+
+            category = new DocumentCategory()
+
+            category.save(
+                    flush: true,
+                    failOnError: true
+            )
+
+            part.documentCategory = category
+        }
+
+        // -----------------------------------------------------
+        // Replace existing tags
+        // -----------------------------------------------------
+
+        category.tags?.clear()
+
+        for (Term tag : tags) {
+
+            category.addToTags(tag)
+        }
+
+        // -----------------------------------------------------
+        // Save changes
+        // -----------------------------------------------------
+
+        category.save(
+                flush: true,
+                failOnError: true
+        )
+
+        part.save(
+                flush: true,
+                failOnError: true
+        )
+
+        // -----------------------------------------------------
+        // Response
+        // -----------------------------------------------------
+
+        response.contentType = "application/json"
+
+        render([
+                success: true,
+                partId : part.id,
+                tagIds : requestedIds
+        ] as JSON)
+    }
     //create endpoint for searching for parts, exposes /plmJson/searchParts?originalName=
     @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
   // Search for parts, exposes /plmJson/searchParts?originalName=
