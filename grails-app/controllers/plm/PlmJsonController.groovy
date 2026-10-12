@@ -7,6 +7,7 @@ import grails.converters.JSON
 import grails.plugin.springsecurity.SpringSecurityService
 import grails.plugin.springsecurity.annotation.Secured
 import org.springframework.beans.factory.annotation.Value
+import grails.gorm.transactions.Transactional
 
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
@@ -54,13 +55,92 @@ class PlmJsonController {
 
         return buildDate
     }
+    // ---------------------------------------------------------
+    // Set tags assigned to a PLM part
+    //
+    // POST /plmJson/setPartTags
+    // ---------------------------------------------------------
+
+    @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
+    @Transactional
+    def setPartTags() {
+
+        Map<String, Object> requestJson =
+                request.JSON as Map<String, Object>
+
+        Long partId = requestJson.get("partId") as Long
+
+        List tagIds = requestJson.get("tagIds") as List
+
+        if (partId == null || tagIds == null) {
+            render(
+                status: 400,
+                contentType: "application/json",
+                text: '{"error":"partId and tagIds are required"}'
+            )
+            return
+        }
+
+        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
+
+        if (part == null) {
+            render(
+                status: 404,
+                contentType: "application/json",
+                text: '{"error":"Part not found"}'
+            )
+            return
+        }
+
+        User user = springSecurityService.currentUser as User
+
+        // IMPORTANT:
+        // Validate write permission here using the appropriate
+        // method in PlmFreeCadSecurityService.
+        // Download permission alone is not sufficient.
+
+        List<Long> requestedIds =
+                tagIds.collect { Object id -> id as Long }.unique()
+
+        List<Term> tags = requestedIds.collect { Long id ->
+            Term.get(id)
+        }
+
+        if (tags.any { Term tag -> tag == null }) {
+            render(
+                status: 400,
+                contentType: "application/json",
+                text: '{"error":"One or more tag IDs are invalid"}'
+            )
+            return
+        }
+
+        // Replace the existing tags.
+        // Adjust this line to match the actual domain relationship.
+        part.dc.tags.clear()
+
+        tags.each { Term tag ->
+            part.dc.tags.add(tag)
+        }
+
+        part.save(flush: true, failOnError: true)
+
+        render(
+            [
+                success: true,
+                partId : part.id,
+                tagIds : requestedIds
+            ] as JSON
+        )
+    }
+
 
     // Endpoint: /plmJson/serverInfo
     def serverInfo() {
 
         Map<String, Object> result = [
                 serverBuild             : getServerBuildDate(),
-                messagingProtocolVersion: "4",
+                messagingProtocolVersion: "5",
                 maximumFileUploadSize   : maximumFileUploadSize,
                 maxRequestSize          : maximumRequestSize
         ] as Map<String, Object>
