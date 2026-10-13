@@ -64,7 +64,7 @@ class PlmJsonController {
 
         Map<String, Object> result = [
                 serverBuild             : getServerBuildDate(),
-                messagingProtocolVersion: "5",
+                messagingProtocolVersion: "6",
                 maximumFileUploadSize   : maximumFileUploadSize,
                 maxRequestSize          : maximumRequestSize
         ] as Map<String, Object>
@@ -214,12 +214,38 @@ def workspaceParts() {
                 "plmStatus",
                 plmPart.status?.toString()
         )
+        // -----------------------------------------------------
+        // Retrieve tags assigned to this PLM part
+        // -----------------------------------------------------
 
+        List<String> tagNames = []
+
+        if (plmPart.documentCategory != null) {
+
+            tagNames = Term.executeQuery(
+                    '''
+                    select distinct t.name
+                    from DocumentCategory dc
+                    join dc.tags t
+                    where dc.id = :categoryId
+                    order by t.name
+                    ''',
+                    [
+                            categoryId: plmPart.documentCategory.id
+                    ]
+            ) as List<String>
+        }
+
+        resultPart.put(
+                "tags",
+                tagNames
+        )
         } else {
 
             /*
              * No matching active/latest PLM part was found.
              */
+
             resultPart.put(
                     "existsInPlm",
                     false
@@ -228,6 +254,11 @@ def workspaceParts() {
             resultPart.put(
                     "plmStatus",
                     "NOT_IN_PLM"
+            )
+
+            resultPart.put(
+                    "tags",
+                    [] as List<String>
             )
         }
 
