@@ -13,6 +13,20 @@ import attachment.DocumentCategory
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
 class PlmJsonController {
+    // =========================================================
+    // SERVER FEATURE CONFIGURATION
+    // =========================================================
+
+    static final boolean FEATURE_TAGS             = true
+    static final boolean FEATURE_PARTS_BY_TAG     = true
+    static final boolean FEATURE_WORKSPACE_PARTS  = true
+    static final boolean FEATURE_SET_PART_TAGS    = true
+    static final boolean FEATURE_SEARCH_PARTS     = true
+
+    // =========================================================
+    // SERVICES
+    // =========================================================
+
 
     PlmFreeCadSecurityService plmFreeCadSecurityService
     SpringSecurityService springSecurityService
@@ -59,19 +73,54 @@ class PlmJsonController {
 
 
 
+    // ---------------------------------------------------------
     // Endpoint: /plmJson/serverInfo
+    //
+    // Returns server information and supported features.
+    // ---------------------------------------------------------
+
     def serverInfo() {
+
+         // -----------------------------------------------------
+        // Build list of enabled features
+        // -----------------------------------------------------
+
+        List<String> features = []
+
+        if (FEATURE_TAGS) {
+            features.add("tags")
+        }
+
+        if (FEATURE_PARTS_BY_TAG) {
+            features.add("partsByTag")
+        }
+
+        if (FEATURE_WORKSPACE_PARTS) {
+            features.add("workspaceParts")
+        }
+
+        if (FEATURE_SET_PART_TAGS) {
+            features.add("setPartTags")
+        }
+
+        if (FEATURE_SEARCH_PARTS) {
+            features.add("searchParts")
+        }
+    
 
         Map<String, Object> result = [
                 serverBuild             : getServerBuildDate(),
                 messagingProtocolVersion: "6",
                 maximumFileUploadSize   : maximumFileUploadSize,
-                maxRequestSize          : maximumRequestSize
+                maxRequestSize          : maximumRequestSize,
+                features                : features
         ] as Map<String, Object>
-
         response.contentType = 'application/json'
+
         render result as JSON
     }
+
+
     //expose api for tags, endpoint /plmJson/tags
     def tags() {
         List<Term> termList = Term.list(
