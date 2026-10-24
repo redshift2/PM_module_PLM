@@ -9,7 +9,6 @@ import org.springframework.web.multipart.MultipartRequest
 
 import java.nio.file.Files
 import java.util.zip.ZipFile
-import org.springframework.transaction.interceptor.TransactionAspectSupport
 
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
@@ -58,7 +57,7 @@ class PlmProtoController {
             response.outputStream.flush()
 
         } catch (IllegalStateException e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()
+            transactionStatus.setRollbackOnly()
             log.warn "PLM protobuf upload rejected: ${e.message}"
 
             plmFreeCadProtoService.incomingBucket = null
@@ -67,7 +66,7 @@ class PlmProtoController {
             render "PLM_CONFLICT: ${e.message}"
 
         } catch (Exception e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()
+            transactionStatus.setRollbackOnly()
             log.error("PLM protobuf upload failed", e)
 
             plmFreeCadProtoService.incomingBucket = null
@@ -123,8 +122,7 @@ class PlmProtoController {
             response.outputStream.flush()
 
         } catch (IllegalStateException e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()
-
+            transactionStatus.setRollbackOnly()
             log.warn "PLM file upload rejected: ${e.message}"
 
             plmFreeCadProtoService.incomingBucket = null
@@ -133,7 +131,7 @@ class PlmProtoController {
             render "PLM_CONFLICT: ${e.message}"
 
         } catch (Exception e) {
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly()
+            transactionStatus.setRollbackOnly()
             log.error("PLM file upload failed", e)
 
             plmFreeCadProtoService.incomingBucket = null

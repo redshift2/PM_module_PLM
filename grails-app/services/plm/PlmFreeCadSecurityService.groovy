@@ -59,112 +59,67 @@ class PlmFreeCadSecurityService {
         TaackAppRegisterService.register(new TaackApp(PlmController.&parts as MethodClosure, new String(this.class.getResourceAsStream("/plm/plm.svg").readAllBytes())))
     }
 
-
-    // ------------------------------------------------------------
-    // General editing permissions
-    // ------------------------------------------------------------
-
+    // General editing permissions.
     boolean canEditFile(PlmFreeCadPart plmDoc, User user) {
+        if (plmDoc == null || user == null) return false
 
-        if (plmDoc == null || user == null) {
+        if (plmDoc.lifecycleState == PlmPartLifecycleState.RELEASED) {
             return false
         }
 
-        // Released parts cannot be modified.
-        if (plmDoc.lifecycleState ==
-                PlmPartLifecycleState.RELEASED) {
-            return false
-        }
-
-        // A checked-out part can only be edited by
-        // the user who owns the checkout.
-        if (plmDoc.lifecycleState ==
-                PlmPartLifecycleState.CHECKED_OUT) {
-
-            return plmDoc.checkedOutBy != null &&
+        if (plmDoc.lifecycleState == PlmPartLifecycleState.CHECKED_OUT) {
+            return plmDoc.checkedOutBy == null ||
                     plmDoc.checkedOutBy.id == user.id
         }
 
-        // WIP metadata can be edited.
-        // File uploads still require checkout.
-        return plmDoc.lifecycleState ==
-                PlmPartLifecycleState.WIP
+        return plmDoc.lifecycleState == PlmPartLifecycleState.WIP
     }
 
-
-    // ------------------------------------------------------------
-    // Checkout permissions
-    // ------------------------------------------------------------
-
+    // A released part may be checked out by creating a new major revision.
     boolean canCheckOutPart(PlmFreeCadPart part, User user) {
-
-        if (part == null || user == null) {
+        if (part == null || user == null ||
+                part.active != true || part.nextVersion != null) {
             return false
         }
 
-        if (part.lifecycleState !=
-                PlmPartLifecycleState.WIP) {
-            return false
+        if (part.lifecycleState == PlmPartLifecycleState.RELEASED) {
+            return canCreateRevision(part, user)
         }
 
-        return canEditFile(part, user)
-    }
-
-
-    // ------------------------------------------------------------
-    // File upload permissions
-    // ------------------------------------------------------------
-
-    boolean canUploadPart(PlmFreeCadPart part, User user) {
-
-        if (part == null || user == null) {
-            return false
-        }
-
-        if (part.lifecycleState !=
-                PlmPartLifecycleState.CHECKED_OUT) {
-            return false
-        }
-
-        if (part.checkedOutBy == null) {
-            return false
-        }
-
-        return part.checkedOutBy.id == user.id &&
+        return part.lifecycleState == PlmPartLifecycleState.WIP &&
                 canEditFile(part, user)
     }
 
+    // Unowned checkouts may be uploaded by any authenticated user.
+    boolean canUploadPart(PlmFreeCadPart part, User user) {
+        if (part == null || user == null ||
+                part.active != true || part.nextVersion != null) {
+            return false
+        }
 
-    // ------------------------------------------------------------
-    // Release permissions
-    // ------------------------------------------------------------
+        if (part.lifecycleState != PlmPartLifecycleState.CHECKED_OUT) {
+            return false
+        }
+
+        return (part.checkedOutBy == null ||
+                part.checkedOutBy.id == user.id) &&
+                canEditFile(part, user)
+    }
 
     boolean canReleasePart(PlmFreeCadPart part, User user) {
+        if (part == null || user == null) return false
 
-        if (part == null || user == null) {
-            return false
-        }
-
-        return part.lifecycleState ==
-                PlmPartLifecycleState.WIP &&
+        return part.lifecycleState == PlmPartLifecycleState.WIP &&
                 canEditFile(part, user)
     }
 
-
-    // ------------------------------------------------------------
-    // Create revision permissions
-    // ------------------------------------------------------------
-
-    boolean canCreateRevision(
-            PlmFreeCadPart part,
-            User user) {
-
-        if (part == null || user == null) {
+    boolean canCreateRevision(PlmFreeCadPart part, User user) {
+        if (part == null || user == null ||
+                part.active != true || part.nextVersion != null) {
             return false
         }
 
-        return part.lifecycleState ==
-                PlmPartLifecycleState.RELEASED &&
+        return part.lifecycleState == PlmPartLifecycleState.RELEASED &&
                 canDownloadFile(part, user)
     }
 
@@ -173,10 +128,10 @@ class PlmFreeCadSecurityService {
     }
 
     boolean canDownloadFile(PlmFreeCadPart plmDoc, User user) {
+        if (plmDoc == null || user == null) return false
         if (plmDoc.nextVersion) plmDoc = plmDoc.nextVersion
         if (user == plmDoc.userCreated) return true
         if (!plmDoc.documentAccess) return true
         return AttachmentSecurityService.canDownloadFile(plmDoc.documentAccess, plmDoc.userCreated, user)
     }
-
 }

@@ -181,9 +181,9 @@ class PlmFreeCadProtoService {
             if (part != null && part.active != true) {
                 throw new IllegalStateException("Inactive part cannot be uploaded: ${plmFile.id}")
             }
-            if (part?.status == PlmFreeCadPartStatus.LOCKED) {
-                throw new IllegalStateException("Legacy LOCKED part: ${plmFile.id}")
-            }
+            // Legacy LOCKED status is not an upload authorization rule.
+            // Changed CAD content is validated below using lifecycle state,
+            // checkout ownership, and canUploadPart(part, user).
 
             String declaredSha = plmFile.sha1Hex
             byte[] bytes = null
