@@ -38,6 +38,24 @@ enum PlmFreeCadPartStatus implements IEnumTransition2<User> {
 class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadPart> {
 
     Long computedVersion = 0
+    // ------------------------------------------------------------
+    // PLM lifecycle and major/minor versioning
+    // ------------------------------------------------------------
+
+    Integer majorVersion = 1
+    Integer minorVersion = 0
+
+    PlmPartLifecycleState lifecycleState = PlmPartLifecycleState.WIP
+
+    User checkedOutBy
+    Date checkedOutAt
+
+    User releasedBy
+    Date releasedAt
+
+    String getDisplayVersion() {
+        return "${majorVersion ?: 1}.${minorVersion ?: 0}"
+    }
 
     User lockedBy
 
@@ -82,6 +100,13 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
         originalName nullable: true
         pathOnHost nullable: true
         creationOrder nullable: false
+        majorVersion nullable: true, min: 1
+        minorVersion nullable: true, min: 0
+        lifecycleState nullable: true
+        checkedOutBy nullable: true
+        checkedOutAt nullable: true
+        releasedBy nullable: true
+        releasedAt nullable: true
     }
 
     static hasMany = [
@@ -126,6 +151,17 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
             oldPart.documentAccess = documentAccess
             oldPart.documentCategory = documentCategory
             oldPart.status = status
+            // ------------------------------------------------------------
+            // Preserve lifecycle information in historical snapshot
+            // ------------------------------------------------------------
+            oldPart.majorVersion = majorVersion
+            oldPart.minorVersion = minorVersion
+            oldPart.lifecycleState = lifecycleState
+            oldPart.checkedOutBy = checkedOutBy
+            oldPart.checkedOutAt = checkedOutAt
+            oldPart.releasedBy = releasedBy
+            oldPart.releasedAt = releasedAt
+
 
 //            plmLinks?.each {
 //                oldPart.addToPlmLinks(it)

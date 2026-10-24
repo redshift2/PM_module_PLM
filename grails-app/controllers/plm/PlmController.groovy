@@ -188,8 +188,21 @@ class PlmController implements WebAttributes {
 
     @Transactional
     def savePart() {
-        def p = new PlmFreeCadPart()
-        taackSaveService.saveThenReloadOrRenderErrors(PlmFreeCadPart, [null, p.status_, p.documentAccess_, p.writeAccess_, p.computedVersion_] as FieldInfo[])
+        PlmFreeCadPart p = new PlmFreeCadPart()
+
+        taackSaveService.saveThenReloadOrRenderErrors(
+            PlmFreeCadPart,
+            [
+                null,
+                p.status_,
+                p.documentAccess_,
+                p.writeAccess_,
+                p.computedVersion_,
+                p.majorVersion_,
+                p.minorVersion_,
+                p.lifecycleState_
+            ] as FieldInfo[]
+        )
     }
 
     @Transactional

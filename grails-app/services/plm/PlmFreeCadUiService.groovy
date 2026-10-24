@@ -264,9 +264,13 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
 
     UiFormSpecifier buildPartForm(PlmFreeCadPart part) {
         new UiFormSpecifier().ui part, {
-            field part.status_
+            field part.lifecycleState_
             field part.writeAccess_
-            ajaxField part.documentAccess_, AttachmentController.&selectDocumentAccess as MC, part.documentAccess_
+
+            ajaxField part.documentAccess_,
+                    AttachmentController.&selectDocumentAccess as MC,
+                    part.documentAccess_
+
             formAction PlmController.&savePart as MC
         }
     }
@@ -294,11 +298,11 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 }
                 column {
                     sortableFieldHeader p.lockedBy_, u.username_
-                    sortableFieldHeader p.computedVersion_
+                    label 'CAD Version'
                 }
                 column {
                     sortableFieldHeader p.label_
-                    sortableFieldHeader p.status_
+                    label 'Lifecycle State'
                 }
                 label tr('tags.label')
             }
@@ -329,14 +333,14 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 }
                 rowColumn {
                     rowField obj.lockedBy?.username
-                    rowField obj.computedVersion_
+                    rowField "${obj.majorVersion ?: 1}.${obj.minorVersion ?: 0}"
                 }
                 rowColumn {
                     PlmFreeCadPart forkedFrom = obj.forkFrom()
                     if (forkedFrom)
                         rowAction tr('based.on.label'), PlmActionIcon.PARENT * IconStyle.SCALE_DOWN * IconStyle.RIGHT, PlmController.&showPart as MC, forkedFrom.id
                     rowAction obj.label, PlmController.&showPart as MC, obj.id
-                    rowField obj.status_
+                    rowField obj.lifecycleState?.toString() ?: 'WIP'
                 }
                 rowField obj.documentCategory?.tags*.name?.join(', ')
             }
@@ -365,7 +369,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
 
         def showFields = new UiShowSpecifier().ui {
             section tr('version.label'), {
-                if (part.active) fieldLabeled part.computedVersion_
+                if (part.active) field "CAD Version: ${part.majorVersion ?: 1}.${part.minorVersion != null ? part.minorVersion : 0}"
                 if (!part.active) field Style.EMPHASIS + Style.RED, tr('not.active.label')
                 fieldLabeled part.dateCreated_
                 fieldLabeled part.userUpdated_
@@ -376,7 +380,8 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 fieldLabeled part.plmFileDateCreated_
                 fieldLabeled part.plmFileUserCreated_
                 fieldLabeled part.plmContentType_
-                fieldLabeled Style.EMPHASIS, part.status_
+                field "Lifecycle State: ${part.lifecycleState?.toString() ?: 'WIP'}"
+                if (part.checkedOutBy) field "Checked Out By: ${part.checkedOutBy.username}"
                 fieldLabeled part.lockedBy_
                 showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
                 fieldLabeled part.documentCategory?.tags_

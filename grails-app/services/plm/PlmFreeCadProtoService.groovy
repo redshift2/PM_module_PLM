@@ -5,6 +5,7 @@ import attachment.DocumentCategory
 import attachment.config.DocumentCategoryEnum
 import crew.User
 import grails.compiler.GrailsCompileStatic
+import grails.gorm.transactions.Transactional
 import grails.plugin.springsecurity.SpringSecurityService
 import plm.freecad.FreecadPlm
 import plm.freecad.FreecadPlm.PlmFile
@@ -13,7 +14,7 @@ import taack.ui.TaackUiConfiguration
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.security.DigestInputStream
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.zip.ZipEntry
@@ -25,221 +26,357 @@ class PlmFreeCadProtoService {
     SpringSecurityService springSecurityService
     PlmFreeCadSecurityService plmFreeCadSecurityService
 
-    final private String intranetRoot = TaackUiConfiguration.root
+    private final String intranetRoot = TaackUiConfiguration.root
 
-    String getStorePath() {
-        intranetRoot + "/plmFreecad/model"
-    }
+    String getStorePath() { intranetRoot + '/plmFreecad/model' }
+    String getPreviewPath() { intranetRoot + '/plmFreecad/preview' }
 
-    String getPreviewPath() {
-        intranetRoot + "/plmFreecad/preview"
-    }
-
+    // Existing two-request protocol: uploadProto -> uploadZip.
+    // NOTE: this field is shared if this Grails service is a singleton.
+    // See deployment note below about concurrent uploads.
     FreecadPlm.Bucket incomingBucket = null
 
     FreecadPlm.Bucket processProto(ZipFile zipFile) {
         FreecadPlm.Bucket.Builder outbound = FreecadPlm.Bucket.newBuilder()
         outbound.setStatus(FreecadPlm.ServerStatus.NOK_PROTO)
 
-        var protoBin = zipFile.getEntry("proto.bin")
-        incomingBucket = FreecadPlm.Bucket.parseFrom(zipFile.getInputStream(protoBin))
-        outbound.setStatus(FreecadPlm.ServerStatus.OK_PROTO)
-        for (PlmFile plmFile in incomingBucket.plmFilesMap.values()) {
-            PlmFreeCadPart existingPart = PlmFreeCadPart.findByPlmContentShaOne(plmFile.sha1Hex)
-            if (existingPart) {
-                log.info "existingPart for ${plmFile.sha1Hex}"
-                if (plmFile.label != existingPart.label) {
-                    log.warn "Part label becomes ${plmFile.label}"
-                    existingPart.label = plmFile.label
-                }
-                if (plmFile.fileName != existingPart.pathOnHost) {
-                    log.warn "Part path becomes ${plmFile.fileName}"
-                    existingPart.pathOnHost = plmFile.fileName
-                }
-                outbound.addServerSha1Files(plmFile.sha1Hex)
-            } else {
-                log.info "no existingPart for ${plmFile.sha1Hex}"
+        ZipEntry protoEntry = zipFile.getEntry('proto.bin')
+        if (protoEntry == null) {
+            throw new IllegalStateException('Missing proto.bin in protobuf ZIP.')
+        }
+
+        FreecadPlm.Bucket parsed
+        InputStream input = zipFile.getInputStream(protoEntry)
+        try {
+            parsed = FreecadPlm.Bucket.parseFrom(input)
+        } finally {
+            input.close()
+        }
+
+        // This step only negotiates which content hashes already exist.
+        // It must not modify part metadata or lifecycle state.
+        for (PlmFile plmFile : parsed.plmFilesMap.values()) {
+            String sha1 = plmFile.sha1Hex
+            if (sha1 && PlmFreeCadPart.findByPlmContentShaOne(sha1) != null) {
+                outbound.addServerSha1Files(sha1)
             }
         }
-        log.info "return outbound ..."
+
+        incomingBucket = parsed
+        outbound.setStatus(FreecadPlm.ServerStatus.OK_PROTO)
         return outbound.build()
     }
 
+    private static String sha1Of(byte[] bytes) {
+        return MessageDigest.getInstance('SHA-1').digest(bytes).encodeHex().toString()
+    }
 
+    private static byte[] readEntry(ZipFile zipFile, ZipEntry entry) {
+        InputStream input = zipFile.getInputStream(entry)
+        try {
+            ByteArrayOutputStream output = new ByteArrayOutputStream()
+            byte[] buffer = new byte[8192]
+            int count
+            while ((count = input.read(buffer)) != -1) {
+                output.write(buffer, 0, count)
+            }
+            return output.toByteArray()
+        } finally {
+            input.close()
+        }
+    }
+
+    private void validateUpload(PlmFreeCadPart part, User user) {
+        if (user == null) {
+            throw new IllegalStateException('No authenticated PLM user.')
+        }
+        if (part == null) return // New CAD part.
+        if (part.active != true || part.nextVersion != null) {
+            throw new IllegalStateException('Only the current active part can be uploaded.')
+        }
+        if (part.lifecycleState == PlmPartLifecycleState.RELEASED) {
+            throw new IllegalStateException(
+                "Part ${part.originalName} is RELEASED. Create a new revision before modifying its CAD content."
+            )
+        }
+        if (!plmFreeCadSecurityService.canUploadPart(part, user)) {
+            throw new IllegalStateException(
+                "Part ${part.originalName} must be checked out by the current user before uploading modified CAD content."
+            )
+        }
+    }
+
+    private static PlmFreeCadLink snapshotLink(PlmFreeCadLink source,
+                                                PlmFreeCadPart historicalParent,
+                                                User user) {
+        return new PlmFreeCadLink(
+            parentPart: historicalParent,
+            part: source.part,
+            partLinkVersion: source.partLinkVersion,
+            linkedObject: source.linkedObject,
+            linkClaimChild: source.linkClaimChild,
+            linkTransform: source.linkTransform,
+            linkCopyOnChange: source.linkCopyOnChange,
+            userCreated: source.userCreated ?: user,
+            userUpdated: user
+        )
+    }
+
+    private static void writeContentOnce(Path target, byte[] bytes) {
+        Files.createDirectories(target.parent)
+        if (Files.exists(target)) {
+            // Never append to content-addressed files. Verify existing data.
+            if (sha1Of(Files.readAllBytes(target)) != sha1Of(bytes)) {
+                throw new IllegalStateException("Stored CAD content hash mismatch: ${target.fileName}")
+            }
+            return
+        }
+        Path temporary = Files.createTempFile(target.parent, 'plm-', '.tmp')
+        try {
+            Files.write(temporary, bytes)
+            try {
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE)
+            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary, target)
+            }
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
+    }
+
+    @Transactional
     FreecadPlm.Bucket processZip(ZipFile zipFile) {
+        FreecadPlm.Bucket bucket = incomingBucket
+        if (bucket == null) {
+            throw new IllegalStateException('Upload metadata is missing; call uploadProto first.')
+        }
+        User user = springSecurityService.currentUser as User
+        if (user == null) throw new IllegalStateException('No authenticated PLM user.')
+
         FreecadPlm.Bucket.Builder outbound = FreecadPlm.Bucket.newBuilder()
         outbound.setStatus(FreecadPlm.ServerStatus.NOK_FILES)
-        Map<String, FreecadPlm.PlmLink> linksMap = incomingBucket.linksMap
-        Map<String, PlmFile> plmFilesMap = incomingBucket.plmFilesMap
-        User u = springSecurityService.currentUser as User
+
+        // Preflight ALL parts before changing database records.
+        Map<String, PlmFreeCadPart> existingByName = [:]
+        Map<String, Boolean> changedByName = [:]
+        Map<String, byte[]> contentByName = [:]
+        Map<String, String> shaByName = [:]
+        Map<String, String> extensionByName = [:]
+
+        for (Map.Entry<String, PlmFile> item : bucket.plmFilesMap.entrySet()) {
+            PlmFile plmFile = item.value
+            if (!plmFile.id || plmFile.id.isBlank()) {
+                throw new IllegalStateException("Missing fileId for ${plmFile.name}.")
+            }
+            if (!plmFile.fileName || plmFile.fileName.contains('"')) {
+                throw new IllegalStateException("Invalid filename for ${plmFile.name}.")
+            }
+            String extension = plmFile.fileName.contains('.') ?
+                plmFile.fileName.substring(plmFile.fileName.lastIndexOf('.') + 1) : 'bin'
+            if (!(extension ==~ /[A-Za-z0-9]+/)) {
+                throw new IllegalStateException("Invalid extension for ${plmFile.fileName}.")
+            }
+
+            PlmFreeCadPart part = PlmFreeCadPart.findByFileIdAndNextVersionIsNull(plmFile.id)
+            if (part != null && part.active != true) {
+                throw new IllegalStateException("Inactive part cannot be uploaded: ${plmFile.id}")
+            }
+            if (part?.status == PlmFreeCadPartStatus.LOCKED) {
+                throw new IllegalStateException("Legacy LOCKED part: ${plmFile.id}")
+            }
+
+            String declaredSha = plmFile.sha1Hex
+            byte[] bytes = null
+            if (!plmFile.fileContent.isEmpty()) {
+                bytes = plmFile.fileContent.toByteArray()
+            } else if (declaredSha) {
+                ZipEntry entry = zipFile.getEntry(declaredSha)
+                if (entry != null) bytes = readEntry(zipFile, entry)
+            }
+
+            String sha = bytes != null ? sha1Of(bytes) : declaredSha
+            if (!sha || !(sha ==~ /[a-fA-F0-9]{40}/)) {
+                throw new IllegalStateException("Invalid or missing SHA-1 for ${plmFile.name}.")
+            }
+            if (declaredSha && !sha.equalsIgnoreCase(declaredSha)) {
+                throw new IllegalStateException("SHA-1 mismatch for ${plmFile.name}.")
+            }
+            sha = sha.toLowerCase(Locale.ROOT)
+
+            boolean changed = part == null || part.plmContentShaOne == null ||
+                !sha.equalsIgnoreCase(part.plmContentShaOne)
+            if (changed) validateUpload(part, user)
+
+            Path stored = Paths.get(storePath, sha + '.' + extension)
+            if (bytes == null && !Files.exists(stored)) {
+                // Content may already be stored with another extension.
+                PlmFreeCadPart matching = PlmFreeCadPart.findByPlmContentShaOne(sha)
+                if (matching?.plmFilePath) {
+                    Path existingPath = Paths.get(storePath, matching.plmFilePath)
+                    if (Files.exists(existingPath)) {
+                        bytes = Files.readAllBytes(existingPath)
+                    }
+                }
+            }
+            if (bytes == null && !Files.exists(stored)) {
+                throw new IllegalStateException("Missing CAD content for ${plmFile.name} (${sha}).")
+            }
+            if (bytes != null && sha1Of(bytes) != sha) {
+                throw new IllegalStateException("Stored/source content mismatch for ${plmFile.name}.")
+            }
+            if (bytes == null && sha1Of(Files.readAllBytes(stored)) != sha) {
+                throw new IllegalStateException("Stored content is corrupt for ${plmFile.name}.")
+            }
+
+            existingByName.put(item.key, part)
+            changedByName.put(item.key, changed)
+            contentByName.put(item.key, bytes)
+            shaByName.put(item.key, sha)
+            extensionByName.put(item.key, extension)
+        }
+
         Map<String, PlmFreeCadPart> objNameToPart = [:]
         Map<String, List<PlmFreeCadPart>> partLinkedPartNameToParts = [:]
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX")
-        dateFormat.setTimeZone(TimeZone.getTimeZone("UTC"))
-        for (Map.Entry<String, PlmFile> entryIt in plmFilesMap) {
-            PlmFile plmFile = entryIt.value
-            byte[] fileContent = null
-            InputStream fileContentIs = null
-            String sha1 = null
-            if (!plmFile.fileContent.isEmpty()) {
-                fileContent = plmFile.fileContent.toByteArray()
-                sha1 = MessageDigest.getInstance('SHA1').digest(fileContent).encodeHex().toString()
-            } else {
-                sha1 = plmFile.sha1Hex
-                ZipEntry entry = zipFile.getEntry(sha1)
-                if (entry) {
-                    InputStream zipFileContentIs = zipFile.getInputStream(entry)
-                    MessageDigest digest = MessageDigest.getInstance("SHA1")
-                    try (DigestInputStream dis = new DigestInputStream(zipFileContentIs, digest)) {
-                        byte[] buffer = new byte[8192]
-                        while (dis.read(buffer) != -1) {
-                        }
-                    }
-                    String computedSha1 = digest.digest().encodeHex().toString()
-                    if (computedSha1 != sha1) {
-                        log.warn("Sha1($sha1) != computedSha1($computedSha1)")
-                        return outbound.build()
-                    }
-                    fileContentIs = zipFile.getInputStream(zipFile.getEntry(sha1))
-                    if (!plmFile.filePreview.isEmpty()) {
-                        Path filePreviewPath = Paths.get(previewPath, sha1 + '.png')
-                        filePreviewPath.toFile() << plmFile.filePreview.toByteArray()
-                    }
+        dateFormat.setTimeZone(TimeZone.getTimeZone('UTC'))
+
+        for (Map.Entry<String, PlmFile> item : bucket.plmFilesMap.entrySet()) {
+            PlmFile plmFile = item.value
+            PlmFreeCadPart part = existingByName.get(item.key)
+            boolean changed = changedByName.get(item.key) == Boolean.TRUE
+            String sha = shaByName.get(item.key)
+            String extension = extensionByName.get(item.key)
+            byte[] bytes = contentByName.get(item.key)
+
+            if (changed) {
+                if (part == null) {
+                    part = new PlmFreeCadPart()
+                    part.userCreated = user
+                    part.documentCategory = new DocumentCategory(category: DocumentCategoryEnum.OTHER)
+                    part.creationOrder = Long.MAX_VALUE
+                    part.majorVersion = 1
+                    part.minorVersion = 0
+                    part.lifecycleState = PlmPartLifecycleState.WIP
                 } else {
-                    log.info "Entry null for $sha1"
-                }
-            }
-            PlmFreeCadPart existingPart = PlmFreeCadPart.findByPlmContentShaOne(sha1)
-            String ext = plmFile.fileName.substring(plmFile.fileName.lastIndexOf('.') + 1)
-
-            if (existingPart?.status == PlmFreeCadPartStatus.LOCKED) {
-                log.error "Attempt to update Locked Part (from sha1): ${plmFile.name} $existingPart"
-                return outbound.build()
-            } else if (existingPart && !plmFreeCadSecurityService.canEditFile(existingPart, u)) {
-                log.error "Attempt to update part you are not supposed to edit (from sha1): ${plmFile.name} $existingPart"
-                return outbound.build()
-            } else if (plmFile.id == null || plmFile.id.isBlank()) {
-                log.error "PlmFile without ID: ${plmFile.name} $existingPart"
-                return outbound.build()
-            } else if (plmFile.fileName.contains('"')) {
-                log.error "PlmFile fileName contains double quotes: ${plmFile.fileName} $existingPart"
-                return outbound.build()
-            } else {
-                PlmFreeCadPart partToBeCloned = PlmFreeCadPart.findByFileIdAndNextVersionIsNull(plmFile.id)
-                /* ----- Debug start ------ */
-                log.info(
-                    "PLM upload identity check: " +
-                    "name=${plmFile.name}, " +
-                    "fileName=${plmFile.fileName}, " +
-                    "incomingId=${plmFile.id}, " +
-                    "sha1=${sha1}, " +
-                    "existingPartBySha=${existingPart?.id}, " +
-                    "existingPartByFileId=${partToBeCloned?.id}, " +
-                    "currentUser=${u?.id}"
-                )
-                /*---- End debug ----------- */
-                if (partToBeCloned?.status == PlmFreeCadPartStatus.LOCKED) {
-                    log.error "Attempt to update Locked Part (from id): ${plmFile.id} $partToBeCloned"
-                    return outbound.build()
-                } else if (partToBeCloned && !plmFreeCadSecurityService.canEditFile(partToBeCloned, u)) {
-                    log.error "Attempt to update part you are not supposed to edit (from id): ${plmFile.id} $partToBeCloned"
-                    return outbound.build()
-                }
-                log.info "Upload PlmFile: ${plmFile.name} with id: ${plmFile.id}, already exists: ${existingPart}, part to be cloned ${partToBeCloned}"
-                if (!existingPart) {
-                    if (!partToBeCloned) {
-                        partToBeCloned = new PlmFreeCadPart()
-                        partToBeCloned.userCreated = u
-                        partToBeCloned.documentCategory =
-                            new DocumentCategory(category: DocumentCategoryEnum.OTHER)
-
-                        partToBeCloned.creationOrder = Long.MAX_VALUE
+                    PlmFreeCadPart historical = part.cloneDirectObjectData()
+                    if (historical == null) {
+                        throw new IllegalStateException("Unable to snapshot ${plmFile.name}.")
                     }
-                    else {
-                        PlmFreeCadPart oldPart = partToBeCloned.cloneDirectObjectData()
-                        partToBeCloned.plmLinks?.each { PlmFreeCadLink lIt ->
-                            oldPart.addToPlmLinks(lIt)
+                    historical.userUpdated = user
+                    historical.save(flush: true, failOnError: true)
+                    // Create independent historical links; never reparent live links.
+                    if (part.plmLinks != null) {
+                        for (PlmFreeCadLink link : part.plmLinks) {
+                            snapshotLink(link, historical, user).save(flush: true, failOnError: true)
                         }
-
-                        oldPart.userUpdated = u
-                        oldPart.save(flush: true)
-                        if (oldPart.hasErrors()) log.error "${oldPart.errors}"
-
                     }
-                    partToBeCloned.userUpdated = u
-                    File file = new File(storePath + '/' + sha1 + '.' + ext)
-                    if (fileContent) file << fileContent
-                    if (fileContentIs) file << fileContentIs
-                    partToBeCloned.plmFilePath = sha1 + '.' + ext
-                    partToBeCloned.pathOnHost = plmFile.fileName
-                    partToBeCloned.fileId = plmFile.id
-                    partToBeCloned.comment = plmFile.comment
-                    partToBeCloned.label = plmFile.label
-                    partToBeCloned.plmFileLastUpdated = dateFormat.parse(plmFile.lastModifiedDate)
-                    partToBeCloned.plmFileDateCreated = dateFormat.parse(plmFile.createdDate)
-                    partToBeCloned.plmFileUserCreated = plmFile.createdBy
-                    partToBeCloned.plmFileUserUpdated = plmFile.lastModifiedBy
-                    partToBeCloned.plmContentType = Files.probeContentType(file.toPath())
-                    partToBeCloned.plmContentShaOne = sha1
-                    partToBeCloned.originalName = new File(plmFile.fileName).getName()
-                    if (partToBeCloned.originalName.toLowerCase().endsWith(".fcstd")) {
-                        partToBeCloned.originalName = partToBeCloned.originalName.substring( 0, partToBeCloned.originalName.length() - 6)
-                    }
-                    partToBeCloned.cTimeNs = plmFile.getCTimeNs()
-                    partToBeCloned.mTimeNs = plmFile.getUTimeNs()
-
-                    DocumentAccess documentAccess = DocumentAccess.findOrCreateByIsInternalAndIsRestrictedToMyBusinessUnitAndIsRestrictedToMySubsidiaryAndIsRestrictedToMyManagersAndIsRestrictedToEmbeddingObjects(false, false, false, false, true)
-
-                    partToBeCloned.documentAccess = documentAccess
-                    partToBeCloned.save(flush: true, failOnError: true)
-                    if (partToBeCloned.hasErrors()) log.error "${partToBeCloned.errors}"
+                    part.minorVersion = (part.minorVersion ?: 0) + 1
+                    part.lifecycleState = PlmPartLifecycleState.WIP
+                    part.checkedOutBy = null
+                    part.checkedOutAt = null
                 }
-                objNameToPart.put(plmFile.name, existingPart ?: partToBeCloned)
-                plmFile.externalLinkList.each { String lIt ->
-                    partLinkedPartNameToParts[lIt] ?= []
-                    partLinkedPartNameToParts[lIt].add(existingPart ?: partToBeCloned)
+
+                Path target = Paths.get(storePath, sha + '.' + extension)
+                if (bytes != null) writeContentOnce(target, bytes)
+                part.plmFilePath = sha + '.' + extension
+                part.plmContentShaOne = sha
+                part.plmContentType = Files.probeContentType(target)
+                part.plmFileLastUpdated = dateFormat.parse(plmFile.lastModifiedDate)
+                part.plmFileDateCreated = dateFormat.parse(plmFile.createdDate)
+                part.plmFileUserCreated = plmFile.createdBy
+                part.plmFileUserUpdated = plmFile.lastModifiedBy
+                part.cTimeNs = plmFile.getCTimeNs()
+                part.mTimeNs = plmFile.getUTimeNs()
+                part.documentAccess = DocumentAccess.findOrCreateByIsInternalAndIsRestrictedToMyBusinessUnitAndIsRestrictedToMySubsidiaryAndIsRestrictedToMyManagersAndIsRestrictedToEmbeddingObjects(false, false, false, false, true)
+            }
+
+            // Metadata changes are allowed on RELEASED parts and do not
+            // change the CAD version or checkout state.
+            part.pathOnHost = plmFile.fileName
+            part.fileId = plmFile.id
+            part.label = plmFile.label
+            part.comment = plmFile.comment
+            String basename = new File(plmFile.fileName).name
+            part.originalName = basename.toLowerCase(Locale.ROOT).endsWith('.fcstd') ?
+                basename.substring(0, basename.length() - 6) : basename
+            part.userUpdated = user
+            part.save(flush: true, failOnError: true)
+            if (!plmFile.filePreview.isEmpty()) {
+                Path previewTarget = Paths.get(previewPath, sha + '.png')
+                Files.createDirectories(previewTarget.parent)
+                if (!Files.exists(previewTarget)) {
+                    Files.write(previewTarget, plmFile.filePreview.toByteArray())
                 }
             }
-        }
-        linksMap.each { entry ->
-            PlmFreeCadPart part = objNameToPart[entry.key]
-            if (part) {
-                partLinkedPartNameToParts[entry.key]?.each { parent ->
-                    if (parent.id == part.id) {
-                        log.warn("Cyclic dependency for part ${part}")
-                        return
-                    }
-                    PlmFreeCadLink link = PlmFreeCadLink.findByPartAndParentPart(part, parent)
-                    if (!link) {
-                        link = new PlmFreeCadLink(part: part, partLinkVersion: part.computedVersion, parentPart: parent, userCreated: u)
-                    }
-                    link.linkedObject = entry.value.linkedObject
-                    link.userUpdated = u
-                    link.linkTransform = entry.value.linkTransform
-                    link.linkClaimChild = entry.value.linkClaimChild
+            objNameToPart.put(plmFile.name, part)
 
-                    switch (entry.value.linkCopyOnChange) {
-                        case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Disabled:
-                            link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.DISABLED
-                            break
-                        case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Enabled:
-                            link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.ENABLED
-                            break
-                        case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Owned:
-                            link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.OWNED
-                            break
-                        case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.UNRECOGNIZED:
-                            log.error 'FreecadPlm.PlmLink.LinkCopyOnChangeEnum.UNRECOGNIZED'
-                            break
-                    }
-                    link.save(flush: true, failOnError: true)
-                    if (link.hasErrors()) log.error "${link.errors}"
+            for (String externalName : plmFile.externalLinkList) {
+                List<PlmFreeCadPart> parents = partLinkedPartNameToParts.get(externalName)
+                if (parents == null) {
+                    parents = []
+                    partLinkedPartNameToParts.put(externalName, parents)
                 }
-            } else {
-                log.error("No part for ${entry.key} in protobuf !!!")
+                parents.add(part)
             }
         }
+
+        for (Map.Entry<String, FreecadPlm.PlmLink> item : bucket.linksMap.entrySet()) {
+            PlmFreeCadPart referenced = objNameToPart.get(item.key)
+            if (referenced == null) {
+                throw new IllegalStateException("Missing referenced part for link ${item.key}.")
+            }
+            List<PlmFreeCadPart> parents = partLinkedPartNameToParts.get(item.key)
+            if (parents == null) continue
+            for (PlmFreeCadPart parent : parents) {
+                if (parent.id == referenced.id) {
+                    throw new IllegalStateException("Cyclic self-link for ${item.key}.")
+                }
+                PlmFreeCadLink link = PlmFreeCadLink.findByPartAndParentPart(referenced, parent)
+                boolean changedParent = changedByName.values().contains(true) &&
+                    changedByName.get(parentNameFor(parent, objNameToPart)) == Boolean.TRUE
+                if (link == null) {
+                    // Adding an assembly link changes CAD structure.
+                    if (parent.id != null && !changedParent) {
+                        throw new IllegalStateException("New link requires checkout and changed CAD content for ${parent.originalName}.")
+                    }
+                    link = new PlmFreeCadLink(part: referenced,
+                        partLinkVersion: referenced.computedVersion,
+                        parentPart: parent, userCreated: user)
+                } else if (!changedParent) {
+                    // Unchanged CAD must not mutate link geometry or ownership.
+                    continue
+                }
+                link.linkedObject = item.value.linkedObject
+                link.userUpdated = user
+                link.linkTransform = item.value.linkTransform
+                link.linkClaimChild = item.value.linkClaimChild
+                switch (item.value.linkCopyOnChange) {
+                    case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Disabled:
+                        link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.DISABLED
+                        break
+                    case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Enabled:
+                        link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.ENABLED
+                        break
+                    case FreecadPlm.PlmLink.LinkCopyOnChangeEnum.Owned:
+                        link.linkCopyOnChange = PlmFreeCadLinkCopyOnChange.OWNED
+                        break
+                    default:
+                        throw new IllegalStateException("Unknown linkCopyOnChange for ${item.key}.")
+                }
+                link.save(flush: true, failOnError: true)
+            }
+        }
+
+        incomingBucket = null
         outbound.setStatus(FreecadPlm.ServerStatus.OK_FILES)
         return outbound.build()
+    }
+
+    private static String parentNameFor(PlmFreeCadPart parent,
+                                        Map<String, PlmFreeCadPart> objects) {
+        for (Map.Entry<String, PlmFreeCadPart> item : objects.entrySet()) {
+            if (item.value.is(parent)) return item.key
+        }
+        return ''
     }
 }

@@ -60,23 +60,112 @@ class PlmFreeCadSecurityService {
     }
 
 
+    // ------------------------------------------------------------
+    // General editing permissions
+    // ------------------------------------------------------------
+
     boolean canEditFile(PlmFreeCadPart plmDoc, User user) {
-        /*-------debug change----------
-        switch (plmDoc.writeAccess) {
-            case WriteAccess.OWNERS:
-                return plmDoc.userCreated.id == user.id || plmDoc.userCreated.allManagers*.id.contains(user.id)
-                break
-            case WriteAccess.READ_ONLY:
-                return false
-                break
-            case WriteAccess.READERS:
-                return canDownloadFile(plmDoc, user)
-                break
+
+        if (plmDoc == null || user == null) {
+            return false
         }
-        return plmDoc.userCreated.id == user.id
-        This does not work. It will need to be
-        ------ End debug change----------*/
-        return true
+
+        // Released parts cannot be modified.
+        if (plmDoc.lifecycleState ==
+                PlmPartLifecycleState.RELEASED) {
+            return false
+        }
+
+        // A checked-out part can only be edited by
+        // the user who owns the checkout.
+        if (plmDoc.lifecycleState ==
+                PlmPartLifecycleState.CHECKED_OUT) {
+
+            return plmDoc.checkedOutBy != null &&
+                    plmDoc.checkedOutBy.id == user.id
+        }
+
+        // WIP metadata can be edited.
+        // File uploads still require checkout.
+        return plmDoc.lifecycleState ==
+                PlmPartLifecycleState.WIP
+    }
+
+
+    // ------------------------------------------------------------
+    // Checkout permissions
+    // ------------------------------------------------------------
+
+    boolean canCheckOutPart(PlmFreeCadPart part, User user) {
+
+        if (part == null || user == null) {
+            return false
+        }
+
+        if (part.lifecycleState !=
+                PlmPartLifecycleState.WIP) {
+            return false
+        }
+
+        return canEditFile(part, user)
+    }
+
+
+    // ------------------------------------------------------------
+    // File upload permissions
+    // ------------------------------------------------------------
+
+    boolean canUploadPart(PlmFreeCadPart part, User user) {
+
+        if (part == null || user == null) {
+            return false
+        }
+
+        if (part.lifecycleState !=
+                PlmPartLifecycleState.CHECKED_OUT) {
+            return false
+        }
+
+        if (part.checkedOutBy == null) {
+            return false
+        }
+
+        return part.checkedOutBy.id == user.id &&
+                canEditFile(part, user)
+    }
+
+
+    // ------------------------------------------------------------
+    // Release permissions
+    // ------------------------------------------------------------
+
+    boolean canReleasePart(PlmFreeCadPart part, User user) {
+
+        if (part == null || user == null) {
+            return false
+        }
+
+        return part.lifecycleState ==
+                PlmPartLifecycleState.WIP &&
+                canEditFile(part, user)
+    }
+
+
+    // ------------------------------------------------------------
+    // Create revision permissions
+    // ------------------------------------------------------------
+
+    boolean canCreateRevision(
+            PlmFreeCadPart part,
+            User user) {
+
+        if (part == null || user == null) {
+            return false
+        }
+
+        return part.lifecycleState ==
+                PlmPartLifecycleState.RELEASED &&
+                canDownloadFile(part, user)
     }
 
     boolean canDownloadFile(PlmFreeCadPart plmDoc) {

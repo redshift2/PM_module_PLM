@@ -22,6 +22,11 @@ class PlmJsonController {
     static final boolean FEATURE_WORKSPACE_PARTS  = true
     static final boolean FEATURE_SET_PART_TAGS    = true
     static final boolean FEATURE_SEARCH_PARTS     = true
+    static final boolean FEATURE_CHECK_OUT_PART   = true
+    static final boolean FEATURE_CANCEL_CHECK_OUT = true
+    static final boolean FEATURE_RELEASE_PART     = true
+    static final boolean FEATURE_CREATE_REVISION  = true
+    static final boolean FEATURE_PART_HISTORY     = false
 
     // =========================================================
     // SERVICES
@@ -30,6 +35,7 @@ class PlmJsonController {
 
     PlmFreeCadSecurityService plmFreeCadSecurityService
     SpringSecurityService springSecurityService
+    PlmPartLifecycleService plmPartLifecycleService
 
     @Value('${grails.controllers.upload.maxFileSize}')
     Long maximumFileUploadSize
@@ -37,15 +43,42 @@ class PlmJsonController {
     @Value('${grails.controllers.upload.maxRequestSize}')
     Long maximumRequestSize
 
-    private List<Map<String, Object>> prepareParts(List<PlmFreeCadPart> parts, User user) {
+    private List<Map<String, Object>> prepareParts(
+            List<PlmFreeCadPart> parts,
+            User user) {
+
         parts.grep { PlmFreeCadPart part ->
             plmFreeCadSecurityService.canDownloadFile(part, user)
         }.collect { PlmFreeCadPart part ->
-                [
-                        id          : part.id,
-                        label       : part.label,
-                        originalName: part.originalName
-                ] as Map<String, Object>
+
+            [
+                    id            : part.id,
+                    label         : part.label,
+                    originalName  : part.originalName,
+
+                    computedVersion: part.computedVersion,
+
+                    majorVersion  : part.majorVersion,
+                    minorVersion  : part.minorVersion,
+                    version       : part.displayVersion,
+
+                    lifecycleState: part.lifecycleState?.name(),
+
+                    checkedOutBy  : part.checkedOutBy?.username,
+
+                    canCheckOut   : plmFreeCadSecurityService
+                            .canCheckOutPart(part, user),
+
+                    canCheckIn    : plmFreeCadSecurityService
+                            .canUploadPart(part, user),
+
+                    canRelease    : plmFreeCadSecurityService
+                            .canReleasePart(part, user),
+
+                    canCreateRevision: plmFreeCadSecurityService
+                            .canCreateRevision(part, user)
+
+            ] as Map<String, Object>
         }
     }
 
@@ -107,6 +140,25 @@ class PlmJsonController {
             features.add("searchParts")
         }
     
+        if (FEATURE_CHECK_OUT_PART) {
+            features.add("checkOutPart")
+        }
+
+        if (FEATURE_CANCEL_CHECK_OUT) {
+            features.add("cancelCheckOut")
+        }
+
+        if (FEATURE_RELEASE_PART) {
+            features.add("releasePart")
+        }
+
+        if (FEATURE_CREATE_REVISION) {
+            features.add("createRevision")
+        }
+
+        if (FEATURE_PART_HISTORY) {
+            features.add("partHistory")
+        }
 
         Map<String, Object> result = [
                 serverBuild             : getServerBuildDate(),
@@ -258,6 +310,54 @@ def workspaceParts() {
                     "latestVersion",
                     plmPart.computedVersion
             )
+            resultPart.put(
+                    "version",
+                    plmPart.displayVersion
+            )
+
+            resultPart.put(
+                    "majorVersion",
+                    plmPart.majorVersion
+            )
+
+            resultPart.put(
+                    "minorVersion",
+                    plmPart.minorVersion
+            )
+
+            resultPart.put(
+                    "lifecycleState",
+                    plmPart.lifecycleState?.name()
+            )
+
+            resultPart.put(
+                    "checkedOutBy",
+                    plmPart.checkedOutBy?.username
+            )
+
+            resultPart.put(
+                    "canCheckOut",
+                    plmFreeCadSecurityService.canCheckOutPart(
+                            plmPart, user)
+            )
+
+            resultPart.put(
+                    "canCheckIn",
+                    plmFreeCadSecurityService.canUploadPart(
+                            plmPart, user)
+            )
+
+            resultPart.put(
+                    "canRelease",
+                    plmFreeCadSecurityService.canReleasePart(
+                            plmPart, user)
+            )
+
+            resultPart.put(
+                    "canCreateRevision",
+                    plmFreeCadSecurityService.canCreateRevision(
+                            plmPart, user)
+            )
 
         resultPart.put(
                 "plmStatus",
@@ -309,6 +409,17 @@ def workspaceParts() {
                     "tags",
                     [] as List<String>
             )
+            resultPart.put("latestVersion", null)
+            resultPart.put("majorVersion", null)
+            resultPart.put("minorVersion", null)
+            resultPart.put("version", null)
+            resultPart.put("lifecycleState", "NOT_IN_PLM")
+            resultPart.put("checkedOutBy", null)
+
+            resultPart.put("canCheckOut", false)
+            resultPart.put("canCheckIn", false)
+            resultPart.put("canRelease", false)
+            resultPart.put("canCreateRevision", false)
         }
 
         resultParts.add(resultPart)
@@ -529,11 +640,242 @@ def workspaceParts() {
                             id      : part.lockedBy.id,
                             username: part.lockedBy.username
                     ] : null,
+                    majorVersion: part.majorVersion,
+                    minorVersion: part.minorVersion,
+                    version: part.displayVersion,
+                    lifecycleState: part.lifecycleState?.name(),
+                    checkedOutBy: part.checkedOutBy?.username,
+                    canCheckOut: plmFreeCadSecurityService
+                            .canCheckOutPart(part, user),
+                    canCheckIn: plmFreeCadSecurityService
+                            .canUploadPart(part, user),
+                    canRelease: plmFreeCadSecurityService
+                            .canReleasePart(part, user),
+                    canCreateRevision: plmFreeCadSecurityService
+                            .canCreateRevision(part, user),
                     tagId             : tagIds
+
             ] as Map<String, Object>
         }
 
         response.contentType = 'application/json'
         render results as JSON
+    }
+    // ---------------------------------------------------------
+    // POST /plmJson/checkOutPart
+    // ---------------------------------------------------------
+
+    def checkOutPart() {
+
+        if (!FEATURE_CHECK_OUT_PART) {
+            response.status = 404
+            render([error: "Feature disabled"] as JSON)
+            return
+        }
+
+        Map<String, Object> data =
+                request.JSON as Map<String, Object>
+
+        Long partId = data.get("partId") as Long
+
+        if (partId == null) {
+            response.status = 400
+            render([error: "partId is required"] as JSON)
+            return
+        }
+
+        User user =
+                springSecurityService.currentUser as User
+
+        try {
+
+            PlmFreeCadPart part =
+                    plmPartLifecycleService.checkOutPart(partId, user)
+
+            render([
+                    success       : true,
+                    partId        : part.id,
+                    version       : part.displayVersion,
+                    lifecycleState: part.lifecycleState.name(),
+                    checkedOutBy  : part.checkedOutBy?.username
+            ] as JSON)
+
+        } catch (IllegalStateException e) {
+
+            response.status = 409
+            render([
+                    success: false,
+                    error  : e.message
+            ] as JSON)
+        }
+    }
+
+
+    // ---------------------------------------------------------
+    // POST /plmJson/cancelCheckOut
+    // ---------------------------------------------------------
+
+    def cancelCheckOut() {
+
+        if (!FEATURE_CANCEL_CHECK_OUT) {
+            response.status = 404
+            render([error: "Feature disabled"] as JSON)
+            return
+        }
+
+        Map<String, Object> data =
+                request.JSON as Map<String, Object>
+
+        Long partId = data.get("partId") as Long
+
+        if (partId == null) {
+            response.status = 400
+            render([error: "partId is required"] as JSON)
+            return
+        }
+
+        User user =
+                springSecurityService.currentUser as User
+
+        try {
+
+            PlmFreeCadPart part =
+                    plmPartLifecycleService.cancelCheckOut(
+                            partId, user)
+
+            render([
+                    success       : true,
+                    partId        : part.id,
+                    version       : part.displayVersion,
+                    lifecycleState: part.lifecycleState.name()
+            ] as JSON)
+
+        } catch (IllegalStateException e) {
+
+            response.status = 409
+            render([
+                    success: false,
+                    error  : e.message
+            ] as JSON)
+        }
+    }
+
+
+    // ---------------------------------------------------------
+    // POST /plmJson/releasePart
+    // ---------------------------------------------------------
+
+    def releasePart() {
+
+        if (!FEATURE_RELEASE_PART) {
+            response.status = 404
+            render([error: "Feature disabled"] as JSON)
+            return
+        }
+
+        Map<String, Object> data =
+                request.JSON as Map<String, Object>
+
+        Long partId = data.get("partId") as Long
+
+        if (partId == null) {
+            response.status = 400
+            render([error: "partId is required"] as JSON)
+            return
+        }
+
+        User user =
+                springSecurityService.currentUser as User
+
+        try {
+
+            PlmFreeCadPart part =
+                    plmPartLifecycleService.releasePart(
+                            partId, user)
+
+            render([
+                    success       : true,
+                    partId        : part.id,
+                    version       : part.displayVersion,
+                    lifecycleState: part.lifecycleState.name(),
+                    releasedBy    : part.releasedBy?.username
+            ] as JSON)
+
+        } catch (IllegalStateException e) {
+
+            response.status = 409
+            render([
+                    success: false,
+                    error  : e.message
+            ] as JSON)
+        }
+    }
+    // ---------------------------------------------------------
+    // POST /plmJson/createRevision
+    //
+    // Create a new major WIP revision from a RELEASED part.
+    //
+    // Example:
+    // 1.2 RELEASED -> 2.0 WIP
+    // ---------------------------------------------------------
+
+    def createRevision() {
+
+        if (!FEATURE_CREATE_REVISION) {
+            response.status = 404
+            render([error: "Feature disabled"] as JSON)
+            return
+        }
+
+        if (request.method != "POST") {
+            response.status = 405
+            render([error: "POST required"] as JSON)
+            return
+        }
+
+        Map<String, Object> data =
+                request.JSON as Map<String, Object>
+
+        Long partId = data.get("partId") as Long
+
+        if (partId == null) {
+            response.status = 400
+            render([error: "partId is required"] as JSON)
+            return
+        }
+
+        User user =
+                springSecurityService.currentUser as User
+
+        try {
+
+            PlmFreeCadPart part =
+                    plmPartLifecycleService.createRevision(
+                            partId, user)
+
+            response.contentType = "application/json"
+
+            render([
+                    success          : true,
+                    partId           : part.id,
+                    computedVersion  : part.computedVersion,
+                    majorVersion     : part.majorVersion,
+                    minorVersion     : part.minorVersion,
+                    version          : part.displayVersion,
+                    lifecycleState   : part.lifecycleState.name(),
+                    checkedOutBy     : part.checkedOutBy?.username,
+                    canCheckOut      : plmFreeCadSecurityService
+                            .canCheckOutPart(part, user)
+            ] as JSON)
+
+        } catch (IllegalStateException e) {
+
+            response.status = 409
+
+            render([
+                    success: false,
+                    error  : e.message
+            ] as JSON)
+        }
     }
 }
