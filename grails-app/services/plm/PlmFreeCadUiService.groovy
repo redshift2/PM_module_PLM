@@ -359,6 +359,11 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         } else ''
     }
 
+    private static String escapeSummaryHtml(String value) {
+        (value ?: '').replace('&', '&amp;').replace('<', '&lt;')
+                .replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
+    }
+
     UiBlockSpecifier buildFreeCadPartBlockShow(PlmFreeCadPart part, Long partVersion, boolean isMail = false, boolean isHistory = false) {
         MC diffTr = PlmFreeCadUiService.&diffTr as MC
         if (partVersion != null) {
@@ -367,54 +372,105 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
 
         log.info "Showing ${part}"
 
-        def showFields = new UiShowSpecifier().ui {
-            section tr('version.label'), {
-                if (part.active) field "CAD Version: ${part.majorVersion ?: 1}.${part.minorVersion != null ? part.minorVersion : 0}"
+        // Persistent part summary, shown alongside the six content tabs.
+        def showPreview = new UiShowSpecifier().ui {
+            field """<div style="text-align:center;padding:12px;"><img style="width:100%;max-width:340px;height:auto;object-fit:contain;" src="/plm/previewPart/${part.id ?: 0}?partVersion=${part.computedVersion ?: 0}&timestamp=${part.mTimeNs}"></div>"""
+        }
+
+        // A single HTML table prevents Taack's plain `field` values from
+        // running together on one line in the narrow summary column.
+        String summaryVersion = "${part.majorVersion ?: 1}.${part.minorVersion != null ? part.minorVersion : 0}"
+        String summaryStatus = part.lifecycleState?.toString() ?: 'WIP'
+        String summaryOwner = part.checkedOutBy?.username ?: ''
+        List<String> summaryTags = (part.documentCategory?.tags*.name ?: []) as List<String>
+        String tagRows = summaryTags ? summaryTags.collect { String tag ->
+            "<div style=\"padding:2px 0;\">${escapeSummaryHtml(tag)}</div>"
+        }.join('') : '—'
+        String summaryHtml = """
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+              <tbody>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;width:40%;">Version:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryVersion)}</td></tr>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">LOM:</th><td style="padding:6px 8px;">—</td></tr>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Status:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryStatus)}</td></tr>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Owner:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryOwner)}</td></tr>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Tags:</th><td style="padding:6px 8px;">${tagRows}</td></tr>
+              </tbody>
+            </table>
+        """
+        def showSummary = new UiShowSpecifier().ui {
+            section 'Part Summary', {
+                field summaryHtml
                 if (!part.active) field Style.EMPHASIS + Style.RED, tr('not.active.label')
-                fieldLabeled part.dateCreated_
-                fieldLabeled part.userUpdated_
+                showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
+            }
+        }
+
+        def showMetadata = new UiShowSpecifier().ui {
+            section 'Part Metadata', {
                 fieldLabeled part.originalName_
+                fieldLabeled part.label_
+                fieldLabeled part.dateCreated_
+                fieldLabeled part.userCreated_
+                fieldLabeled part.lastUpdated_
+                fieldLabeled part.userUpdated_
                 fieldLabeled part.comment_
                 fieldLabeled part.plmFileLastUpdated_
                 fieldLabeled part.plmFileUserUpdated_
                 fieldLabeled part.plmFileDateCreated_
                 fieldLabeled part.plmFileUserCreated_
                 fieldLabeled part.plmContentType_
-                field "Lifecycle State: ${part.lifecycleState?.toString() ?: 'WIP'}"
-                if (part.checkedOutBy) field "Checked Out By: ${part.checkedOutBy.username}"
                 fieldLabeled part.lockedBy_
-                showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
                 fieldLabeled part.documentCategory?.tags_
             }
-        }
-
-        def showPreview = new UiShowSpecifier().ui {
-            field """<div style="text-align: center;"><img style="max-width: 360px;" src="/plm/previewPart/${part.id ?: 0}?partVersion=${part.computedVersion ?: 0}&timestamp=${part.mTimeNs}"></div>"""
         }
 
         UiBlockSpecifier b = new UiBlockSpecifier().ui {
             row {
                 col BlockSpec.Width.QUARTER, {
-                    show showFields
-                }
-                col BlockSpec.Width.THREE_QUARTER, {
                     show showPreview, {
                         label(tr('preview.label'))
                         menuIcon ActionIcon.DOWNLOAD, PlmController.&downloadBinPart as MC, [id: part.id, partVersion: part.computedVersion ?: 0]
-//                        menuIcon ActionIcon.SHOW, PlmController.&preview3dPart as MC, [id: part.id, partVersion: part.computedVersion ?: 0]
-                        if (!isHistory) {
-                            menuIcon ActionIcon.EDIT, PlmController.&editPart as MC, part.id
-                        }
-                        PlmFreeCadPart baseParent = part.forkFrom()
-                        if (baseParent) {
-                            menuIcon PlmActionIcon.PARENT * IconStyle.SCALE_DOWN * IconStyle.RIGHT, PlmController.&showPart as MC, baseParent.id
-                        }
                     }
+                    show showSummary
                 }
-            }
-            tabs {
-                if (!isMail && !isHistory) {
-                    tab(tr('tab.history.label')) {
+                col BlockSpec.Width.THREE_QUARTER, {
+                    tabs {
+                        tab('Part Metadata') {
+                            show showMetadata, {
+                                if (!isHistory) menuIcon ActionIcon.EDIT, PlmController.&editPart as MC, part.id
+                            }
+                        }
+                        if (!isMail && !isHistory) {
+                            tab('Where Used') {
+                                List<PlmFreeCadLink> parentLinks = PlmFreeCadLink.findAllByPart(part)
+                                if (!parentLinks.empty) {
+                                    List<PlmFreeCadPart> containerParts = parentLinks*.parentPart.findAll { PlmFreeCadPart parent -> parent.active }
+                                    if (containerParts) table buildPartTable(containerParts)
+                                }
+                            }
+                            tab('BOM') {
+                                if (!part.linkedParts.empty) {
+                                    table buildLinkTableFromPartHierarchical(part)
+                                }
+                            }
+                            tab('Attachments') {
+                                table attachmentUiService.buildObjectAttachmentsDropTable(part, part.commentVersionAttachmentList, PlmController.&onDrop as MC), {
+                                    menuIcon ActionIcon.ADD, PlmController.&addAttachment as MC, part.id
+                                }
+                            }
+                        }
+                        if (!isHistory) {
+                            tab('Comments') {
+                                show new UiShowSpecifier().ui {
+                                    String asciidoc = this.genAsciidoc(part)
+                                    inlineHtml(asciidoc, 'asciidocMain')
+                                }, {
+                                    menuIcon ActionIcon.EDIT, PlmController.&addComment as MC, part.id
+                                }
+                            }
+                        }
+                        if (!isMail && !isHistory) {
+                    tab('CAD History') {
                         table new UiTableSpecifier().ui({
                             def h = part.history
                             PlmFreeCadPart p = null
@@ -479,54 +535,8 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                             }
                         })
                     }
-                }
-                if (!isHistory) {
-                    tab(tr('tab.comment.label')) {
-                        show new UiShowSpecifier().ui {
-                            String asciidoc = this.genAsciidoc(part)
-                            inlineHtml(asciidoc, 'asciidocMain')
-                        }, {
-                            menuIcon ActionIcon.EDIT, PlmController.&addComment as MC, part.id
-                            if (isMail)
-                                menuIcon ActionIcon.SHOW, PlmController.&showPart as MC, part.id
                         }
                     }
-                }
-
-                if (!isMail && !isHistory) {
-                    tab(tr('tab.attachments.label')) {
-                        table attachmentUiService.buildObjectAttachmentsDropTable(part, part.commentVersionAttachmentList, PlmController.&onDrop as MC), {
-                            menuIcon ActionIcon.ADD, PlmController.&addAttachment as MC, part.id
-                        }
-                    }
-
-                    tab(tr('tab.hierarchy.label')) {
-                        List<PlmFreeCadLink> parentLinks = PlmFreeCadLink.findAllByPart(part)
-                        if (!parentLinks.empty) {
-                            def containerParts = parentLinks*.parentPart.findAll { it.active }
-                            if (containerParts)
-                                table buildPartTable(containerParts), {
-                                    label(tr('usedIn.label'))
-                                }
-                        }
-                        if (!part.linkedParts.empty) {
-                            table buildLinkTableFromPartHierarchical(part), {
-                                label(tr('plm.links.label'))
-                            }
-                        }
-                    }
-                    tab(tr('duplicates.label')) {
-                        List<PlmFreeCadPart> forks = part.forks()
-                        if (!forks.empty) {
-                            table buildPartTable(forks), {
-                                label(tr('other.history.label'))
-                            }
-                        }
-
-                    }
-                } else if (!isMail) {
-                    if (!part.linkedParts.empty)
-                        table buildLinkTableFromPart(part)
                 }
             }
         }
