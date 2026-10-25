@@ -33,32 +33,43 @@ enum PlmFreeCadPartStatus implements IEnumTransition2<User> {
     }
 }
 
+@CompileStatic
+enum PlmLevelOfMaturity {
+    A, B, C, P
+}
+
 @GrailsCompileStatic
 @TaackFieldEnum
 class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadPart> {
 
     Long computedVersion = 0
-    // ------------------------------------------------------------
-    // PLM lifecycle and major/minor versioning
-    // ------------------------------------------------------------
 
+    // PLM lifecycle and major/minor versioning.
     Integer majorVersion = 1
     Integer minorVersion = 0
-
     PlmPartLifecycleState lifecycleState = PlmPartLifecycleState.WIP
-
     User checkedOutBy
     Date checkedOutAt
-
     User releasedBy
     Date releasedAt
+
+    // Editable part metadata. Does not change CAD version by itself.
+    String description1
+    String description2
+    String description3
+    BigDecimal cost
+    BigDecimal weight
+    String material
+    String supplier
+    String surfaceTreatment
+    PlmLevelOfMaturity lom
+    String dcn
 
     String getDisplayVersion() {
         return "${majorVersion ?: 1}.${minorVersion ?: 0}"
     }
 
     User lockedBy
-
     Date plmFileDateCreated
     Date plmFileLastUpdated
     String plmFileUserUpdated
@@ -70,20 +81,15 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
     String label
     String pathOnHost
     String fileId
-
     String comment
     String commentVersion
-
     Set<PlmFreeCadLink> plmLinks
-
     Long creationOrder = Long.MAX_VALUE
     Boolean active = true
     PlmFreeCadPart nextVersion
     Long cTimeNs
     Long mTimeNs
-
     PlmFreeCadPartStatus status = PlmFreeCadPartStatus.CREATED
-
     Set<Attachment> commentVersionAttachmentList
 
     static constraints = {
@@ -107,6 +113,16 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
         checkedOutAt nullable: true
         releasedBy nullable: true
         releasedAt nullable: true
+        description1 nullable: true, maxSize: 1000
+        description2 nullable: true, maxSize: 1000
+        description3 nullable: true, maxSize: 1000
+        cost nullable: true, min: 0.0G
+        weight nullable: true, min: 0.0G
+        material nullable: true, maxSize: 255
+        supplier nullable: true, maxSize: 255
+        surfaceTreatment nullable: true, maxSize: 255
+        lom nullable: true
+        dcn nullable: true, maxSize: 255
     }
 
     static hasMany = [
@@ -118,6 +134,9 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
         version false
         comment type: 'text'
         commentVersion type: 'text'
+        description1 type: 'text'
+        description2 type: 'text'
+        description3 type: 'text'
         computedVersion column: '`version`'
     }
 
@@ -151,9 +170,6 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
             oldPart.documentAccess = documentAccess
             oldPart.documentCategory = documentCategory
             oldPart.status = status
-            // ------------------------------------------------------------
-            // Preserve lifecycle information in historical snapshot
-            // ------------------------------------------------------------
             oldPart.majorVersion = majorVersion
             oldPart.minorVersion = minorVersion
             oldPart.lifecycleState = lifecycleState
@@ -161,12 +177,17 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
             oldPart.checkedOutAt = checkedOutAt
             oldPart.releasedBy = releasedBy
             oldPart.releasedAt = releasedAt
-
-
-//            plmLinks?.each {
-//                oldPart.addToPlmLinks(it)
-//            }
-
+            // Preserve metadata in the historical CAD snapshot.
+            oldPart.description1 = description1
+            oldPart.description2 = description2
+            oldPart.description3 = description3
+            oldPart.cost = cost
+            oldPart.weight = weight
+            oldPart.material = material
+            oldPart.supplier = supplier
+            oldPart.surfaceTreatment = surfaceTreatment
+            oldPart.lom = lom
+            oldPart.dcn = dcn
             return oldPart
         }
         return null

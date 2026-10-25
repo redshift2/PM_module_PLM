@@ -9,6 +9,8 @@ import grails.compiler.GrailsCompileStatic
 import grails.gorm.transactions.Transactional
 import grails.plugin.springsecurity.annotation.Secured
 import grails.web.api.WebAttributes
+import org.springframework.jdbc.core.JdbcTemplate
+import javax.sql.DataSource
 import org.codehaus.groovy.runtime.MethodClosure
 import org.codehaus.groovy.runtime.MethodClosure as MC
 import org.springframework.web.multipart.MultipartFile
@@ -33,6 +35,10 @@ import taack.wysiwyg.TaackBaseAsciidocSpans
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
 class PlmController implements WebAttributes {
+    grails.plugin.springsecurity.SpringSecurityService springSecurityService
+    DataSource dataSource
+    PlmFreeCadSecurityService plmFreeCadSecurityService
+    PlmPartLifecycleService plmPartLifecycleService
     TaackUiService taackUiService
     PlmFreeCadUiService plmFreeCadUiService
     TaackMetaModelService taackMetaModelService
@@ -170,7 +176,12 @@ class PlmController implements WebAttributes {
         return false
     }
 
+    /** Edit the lifecycle state independently of business metadata. */
     def editPart(PlmFreeCadPart part) {
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
         taackUiService.show(new UiBlockSpecifier().ui {
             modal {
                 form plmFreeCadUiService.buildPartForm(part)
@@ -178,7 +189,98 @@ class PlmController implements WebAttributes {
         })
     }
 
+    /** Edit only business metadata; CAD lifecycle controls remain in editPart. */
+    def editPartMetadata(PlmFreeCadPart part) {
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
+        if ((springSecurityService.currentUser == null)) {
+            render(status: 403, text: 'You cannot edit metadata for this part.')
+            return
+        }
+        taackUiService.show(new UiBlockSpecifier().ui {
+            modal {
+                form plmFreeCadUiService.buildPartMetadataForm(part)
+            }
+        })
+    }
+
+    /**
+     * Metadata-only persistence. Direct JDBC intentionally bypasses the
+     * IDomainHistory snapshot hook which can collide on creation_order.
+     * CAD version, checkout state, and history rows are left untouched.
+     */
+    @Transactional
+    def savePartMetadata() {
+        Long partId = params.long('id')
+        PlmFreeCadPart part = partId == null ? null : PlmFreeCadPart.get(partId)
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
+        if ((springSecurityService.currentUser == null)) {
+            render(status: 403, text: 'You cannot edit metadata for this part.')
+            return
+        }
+
+        String[] names = ['description1', 'description2', 'description3',
+                          'material', 'supplier', 'surfaceTreatment', 'dcn'] as String[]
+        Map<String, String> values = [:]
+        for (String name : names) {
+            String value = params[name] == null ? null : params[name].toString().trim()
+            int limit = name.startsWith('description') ? 1000 : 255
+            if (value != null && value.length() > limit) {
+                render(status: 400, text: "${name} exceeds ${limit} characters.")
+                return
+            }
+            values[name] = value ?: null
+        }
+
+        BigDecimal cost = null
+        BigDecimal weight = null
+        try {
+            if (params['cost']?.toString()?.trim()) cost = new BigDecimal(params['cost'].toString().trim())
+            if (params['weight']?.toString()?.trim()) weight = new BigDecimal(params['weight'].toString().trim())
+        } catch (NumberFormatException ignored) {
+            render(status: 400, text: 'Cost and weight must be valid decimal numbers.')
+            return
+        }
+        if ((cost != null && (cost < 0 || cost.scale() > 4 || cost.precision() - cost.scale() > 15)) ||
+            (weight != null && (weight < 0 || weight.scale() > 4 || weight.precision() - weight.scale() > 15))) {
+            render(status: 400, text: 'Cost and weight must be nonnegative and fit DECIMAL(19,4).')
+            return
+        }
+        String lom = params['lom']?.toString()?.trim()
+        if (lom && !(lom in ['A', 'B', 'C', 'P'])) {
+            render(status: 400, text: 'LOM must be A, B, C, or P.')
+            return
+        }
+
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource)
+        int updated = jdbc.update('''
+            UPDATE plm_free_cad_part SET
+                description1 = ?, description2 = ?, description3 = ?,
+                cost = ?, weight = ?, material = ?, supplier = ?,
+                surface_treatment = ?, lom = ?, dcn = ?
+            WHERE id = ? AND active = TRUE AND next_version_id IS NULL
+        ''',
+            values.description1, values.description2, values.description3,
+            cost, weight, values.material, values.supplier,
+            values.surfaceTreatment, lom ?: null, values.dcn, partId)
+        if (updated != 1) {
+            render(status: 409, text: 'The part changed while metadata was being saved.')
+            return
+        }
+        // JDBC bypasses Hibernate's session; reload the page to fetch fresh values.
+        taackUiService.ajaxReload()
+    }
+
     def editPartCategory(PlmFreeCadPart part) {
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
         taackUiService.show(new UiBlockSpecifier().ui {
             modal {
                 form plmFreeCadUiService.buildPartFormCategory(part)
@@ -186,27 +288,55 @@ class PlmController implements WebAttributes {
         })
     }
 
+    /**
+     * Apply lifecycle transitions using the existing permission-checked service.
+     * Never use TaackSaveService for a status-only edit: its history hook can
+     * insert a duplicate (next_version_id, creation_order) snapshot.
+     */
     @Transactional
     def savePart() {
-        PlmFreeCadPart p = new PlmFreeCadPart()
-
-        taackSaveService.saveThenReloadOrRenderErrors(
-            PlmFreeCadPart,
-            [
-                null,
-                p.status_,
-                p.documentAccess_,
-                p.writeAccess_,
-                p.computedVersion_,
-                p.majorVersion_,
-                p.minorVersion_,
-                p.lifecycleState_
-            ] as FieldInfo[]
-        )
+        Long partId = params.long('id')
+        PlmFreeCadPart part = partId == null ? null : PlmFreeCadPart.get(partId)
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
+        String requested = params['lifecycleState']?.toString()?.trim()
+        if (!(requested in ['WIP', 'CHECKED_OUT', 'RELEASED'])) {
+            render(status: 400, text: 'Select WIP, CHECKED_OUT, or RELEASED.')
+            return
+        }
+        PlmPartLifecycleState current = part.lifecycleState ?: PlmPartLifecycleState.WIP
+        crew.User user = springSecurityService.currentUser as crew.User
+        try {
+            if (requested != current.name()) {
+                if (requested == 'CHECKED_OUT' &&
+                        (current == PlmPartLifecycleState.WIP || current == PlmPartLifecycleState.RELEASED)) {
+                    // A RELEASED part starts a new major revision when checked out.
+                    plmPartLifecycleService.checkOutPart(partId, user)
+                } else if (requested == 'WIP' && current == PlmPartLifecycleState.CHECKED_OUT) {
+                    plmPartLifecycleService.cancelCheckOut(partId, user)
+                } else if (requested == 'RELEASED' && current == PlmPartLifecycleState.WIP) {
+                    plmPartLifecycleService.releasePart(partId, user)
+                } else {
+                    render(status: 409, text: 'This status transition is not allowed. ' +
+                            'Cancel checkout before release; a released part must be revised to change it.')
+                    return
+                }
+            }
+        } catch (IllegalStateException e) {
+            render(status: 403, text: e.message ?: 'Lifecycle transition denied.')
+            return
+        }
+        taackUiService.ajaxReload()
     }
 
     @Transactional
     def savePartCategory(PlmFreeCadPart part) {
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
         if (part.id) {
             part.documentCategory = DocumentCategory.get(params.long('documentCategory'))
         }

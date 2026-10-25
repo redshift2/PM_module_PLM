@@ -262,15 +262,26 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         }
     }
 
+    UiFormSpecifier buildPartMetadataForm(PlmFreeCadPart part) {
+        new UiFormSpecifier().ui part, {
+            field part.description1_
+            field part.description2_
+            field part.description3_
+            field part.cost_
+            field part.weight_
+            field part.material_
+            field part.supplier_
+            field part.surfaceTreatment_
+            field part.lom_
+            field part.dcn_
+            formAction PlmController.&savePartMetadata as MC
+        }
+    }
+
+    /** Lifecycle state is an enum, rendered by Taack as a dropdown. */
     UiFormSpecifier buildPartForm(PlmFreeCadPart part) {
         new UiFormSpecifier().ui part, {
             field part.lifecycleState_
-            field part.writeAccess_
-
-            ajaxField part.documentAccess_,
-                    AttachmentController.&selectDocumentAccess as MC,
-                    part.documentAccess_
-
             formAction PlmController.&savePart as MC
         }
     }
@@ -364,6 +375,17 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 .replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
     }
 
+    // All rows use the same table; no nested Taack fieldLabeled grid.
+    private static String metadataRow(String label, Object value) {
+        String displayed = value == null || value.toString().trim().isEmpty()
+                ? '—' : escapeSummaryHtml(value.toString())
+        return """<tr><td style="width:15%;text-align:right;vertical-align:top;padding:7px 28px 7px 8px;font-weight:normal;">${escapeSummaryHtml(label)}</td><td style="width:85%;text-align:left;vertical-align:top;padding:7px 8px;font-weight:normal;overflow-wrap:anywhere;">${displayed}</td></tr>"""
+    }
+
+    private static String metadataDate(Date date) {
+        date == null ? '—' : new java.text.SimpleDateFormat('yyyy-MM-dd').format(date)
+    }
+
     UiBlockSpecifier buildFreeCadPartBlockShow(PlmFreeCadPart part, Long partVersion, boolean isMail = false, boolean isHistory = false) {
         MC diffTr = PlmFreeCadUiService.&diffTr as MC
         if (partVersion != null) {
@@ -390,7 +412,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
               <tbody>
                 <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;width:40%;">Version:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryVersion)}</td></tr>
-                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">LOM:</th><td style="padding:6px 8px;">—</td></tr>
+                <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">LOM:</th><td style="padding:6px 8px;">${escapeSummaryHtml(part.lom?.toString() ?: "—")}</td></tr>
                 <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Status:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryStatus)}</td></tr>
                 <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Owner:</th><td style="padding:6px 8px;">${escapeSummaryHtml(summaryOwner)}</td></tr>
                 <tr><th style="text-align:left;vertical-align:top;padding:6px 8px;">Tags:</th><td style="padding:6px 8px;">${tagRows}</td></tr>
@@ -401,26 +423,50 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             section 'Part Summary', {
                 field summaryHtml
                 if (!part.active) field Style.EMPHASIS + Style.RED, tr('not.active.label')
+                if (!isHistory && part.active == true && part.nextVersion == null) {
+                    showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPart as MC, part.id
+                }
                 showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
             }
         }
 
+        // Render every field in ONE table, including the original fields.
+        // Mixing fieldLabeled rows with a custom nested table creates
+        // incompatible label/value column positions in Taack.
+        String metadataHtml = """<style>
+            .plm-metadata-table tbody tr:nth-child(odd) { background-color: rgba(255,255,255,0.045); }
+            .plm-metadata-table tbody tr:nth-child(even) { background-color: rgba(255,255,255,0.012); }
+            .plm-metadata-table tbody tr:hover { background-color: rgba(100,160,220,0.12); }
+            </style><table class="plm-metadata-table" style="width:100%;border-collapse:collapse;table-layout:fixed;"><tbody>
+                    ${PlmFreeCadUiService.metadataRow('Part Name', part.originalName)}
+                    ${PlmFreeCadUiService.metadataRow('Label', part.label)}
+                    ${PlmFreeCadUiService.metadataRow('Description 1', part.description1)}
+                    ${PlmFreeCadUiService.metadataRow('Description 2', part.description2)}
+                    ${PlmFreeCadUiService.metadataRow('Description 3', part.description3)}
+                    ${PlmFreeCadUiService.metadataRow('Cost', part.cost)}
+                    ${PlmFreeCadUiService.metadataRow('Weight', part.weight)}
+                    ${PlmFreeCadUiService.metadataRow('Material', part.material)}
+                    ${PlmFreeCadUiService.metadataRow('Supplier', part.supplier)}
+                    ${PlmFreeCadUiService.metadataRow('Surface Treatment', part.surfaceTreatment)}
+                    ${PlmFreeCadUiService.metadataRow('LOM', part.lom)}
+                    ${PlmFreeCadUiService.metadataRow('DCN', part.dcn)}
+                    ${PlmFreeCadUiService.metadataRow('Date Created', PlmFreeCadUiService.metadataDate(part.dateCreated))}
+                    ${PlmFreeCadUiService.metadataRow('User Created', part.userCreated?.username)}
+                    ${PlmFreeCadUiService.metadataRow('Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated))}
+                    ${PlmFreeCadUiService.metadataRow('User Updated', part.userUpdated?.username)}
+                    ${PlmFreeCadUiService.metadataRow('Embedded Com.', part.comment)}
+                    ${PlmFreeCadUiService.metadataRow('File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated))}
+                    ${PlmFreeCadUiService.metadataRow('File User Updated', part.plmFileUserUpdated)}
+                    ${PlmFreeCadUiService.metadataRow('File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated))}
+                    ${PlmFreeCadUiService.metadataRow('File User Created', part.plmFileUserCreated)}
+                    ${PlmFreeCadUiService.metadataRow('Content Type', part.plmContentType)}
+                    ${PlmFreeCadUiService.metadataRow('Locked By', part.lockedBy?.username)}
+                    ${PlmFreeCadUiService.metadataRow('Tags', part.documentCategory?.tags*.name?.join(', '))}
+        </tbody></table>"""
+
         def showMetadata = new UiShowSpecifier().ui {
             section 'Part Metadata', {
-                fieldLabeled part.originalName_
-                fieldLabeled part.label_
-                fieldLabeled part.dateCreated_
-                fieldLabeled part.userCreated_
-                fieldLabeled part.lastUpdated_
-                fieldLabeled part.userUpdated_
-                fieldLabeled part.comment_
-                fieldLabeled part.plmFileLastUpdated_
-                fieldLabeled part.plmFileUserUpdated_
-                fieldLabeled part.plmFileDateCreated_
-                fieldLabeled part.plmFileUserCreated_
-                fieldLabeled part.plmContentType_
-                fieldLabeled part.lockedBy_
-                fieldLabeled part.documentCategory?.tags_
+                field metadataHtml
             }
         }
 
@@ -437,7 +483,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                     tabs {
                         tab('Part Metadata') {
                             show showMetadata, {
-                                if (!isHistory) menuIcon ActionIcon.EDIT, PlmController.&editPart as MC, part.id
+                                if (!isHistory) menuIcon ActionIcon.EDIT, PlmController.&editPartMetadata as MC, part.id
                             }
                         }
                         if (!isMail && !isHistory) {

@@ -181,9 +181,9 @@ class PlmFreeCadProtoService {
             if (part != null && part.active != true) {
                 throw new IllegalStateException("Inactive part cannot be uploaded: ${plmFile.id}")
             }
-            // Legacy LOCKED status is not an upload authorization rule.
-            // Changed CAD content is validated below using lifecycle state,
-            // checkout ownership, and canUploadPart(part, user).
+            if (part?.status == PlmFreeCadPartStatus.LOCKED) {
+                throw new IllegalStateException("Legacy LOCKED part: ${plmFile.id}")
+            }
 
             String declaredSha = plmFile.sha1Hex
             byte[] bytes = null
@@ -262,6 +262,17 @@ class PlmFreeCadProtoService {
                     if (historical == null) {
                         throw new IllegalStateException("Unable to snapshot ${plmFile.name}.")
                     }
+                    // Allocate a unique history sequence within this active part's chain.
+                    // cloneDirectObjectData() uses computedVersion, which can collide
+                    // with history created during checkout of a released revision.
+                    List<PlmFreeCadPart> snapshots = PlmFreeCadPart.findAllByNextVersion(part)
+                    long nextOrder = 1L
+                    for (PlmFreeCadPart snapshot : snapshots) {
+                        if (snapshot.creationOrder != null && snapshot.creationOrder < Long.MAX_VALUE) {
+                            nextOrder = Math.max(nextOrder, snapshot.creationOrder + 1L)
+                        }
+                    }
+                    historical.creationOrder = nextOrder
                     historical.userUpdated = user
                     historical.save(flush: true, failOnError: true)
                     // Create independent historical links; never reparent live links.

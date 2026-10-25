@@ -90,6 +90,18 @@ class PlmPartLifecycleService {
             throw new IllegalStateException('Unable to create revision history.')
         }
 
+        // cloneDirectObjectData() derives creationOrder from computedVersion,
+        // but computedVersion is the Hibernate row version, NOT the history index.
+        // Allocate a history index unique within this part's version chain.
+        List<PlmFreeCadPart> snapshots = PlmFreeCadPart.findAllByNextVersion(part)
+        long nextOrder = 1L
+        for (PlmFreeCadPart snapshot : snapshots) {
+            if (snapshot.creationOrder != null && snapshot.creationOrder < Long.MAX_VALUE) {
+                nextOrder = Math.max(nextOrder, snapshot.creationOrder + 1L)
+            }
+        }
+        oldPart.creationOrder = nextOrder
+
         // Snapshot links independently; do not reparent the live links.
         oldPart.userUpdated = user
         oldPart.save(flush: true, failOnError: true)
