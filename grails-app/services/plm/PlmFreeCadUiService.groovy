@@ -278,10 +278,15 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         }
     }
 
-    /** Lifecycle state is an enum, rendered by Taack as a dropdown. */
     UiFormSpecifier buildPartForm(PlmFreeCadPart part) {
         new UiFormSpecifier().ui part, {
             field part.lifecycleState_
+            field part.writeAccess_
+
+            ajaxField part.documentAccess_,
+                    AttachmentController.&selectDocumentAccess as MC,
+                    part.documentAccess_
+
             formAction PlmController.&savePart as MC
         }
     }
@@ -375,15 +380,26 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 .replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
     }
 
-    // All rows use the same table; no nested Taack fieldLabeled grid.
-    private static String metadataRow(String label, Object value) {
-        String displayed = value == null || value.toString().trim().isEmpty()
-                ? '—' : escapeSummaryHtml(value.toString())
-        return """<tr><td style="width:15%;text-align:right;vertical-align:top;padding:7px 28px 7px 8px;font-weight:normal;">${escapeSummaryHtml(label)}</td><td style="width:85%;text-align:left;vertical-align:top;padding:7px 8px;font-weight:normal;overflow-wrap:anywhere;">${displayed}</td></tr>"""
+    // Two aligned label/value groups per row. Escape all database text.
+    private static String metadataPairRow(String leftLabel, Object leftValue,
+                                          String rightLabel, Object rightValue) {
+        String left = leftValue == null || leftValue.toString().trim().isEmpty()
+                ? '—' : escapeSummaryHtml(leftValue.toString())
+        String right = rightValue == null || rightValue.toString().trim().isEmpty()
+                ? '—' : escapeSummaryHtml(rightValue.toString())
+        String rightLabelHtml = rightLabel == null ? '' : escapeSummaryHtml(rightLabel)
+        String rightValueHtml = rightLabel == null ? '' : right
+        return """<tr>
+            <td class="plm-meta-label">${escapeSummaryHtml(leftLabel)}</td>
+            <td class="plm-meta-value">${left}</td>
+            <td class="plm-meta-gap"></td>
+            <td class="plm-meta-label">${rightLabelHtml}</td>
+            <td class="plm-meta-value">${rightValueHtml}</td>
+        </tr>"""
     }
 
     private static String metadataDate(Date date) {
-        date == null ? '—' : new java.text.SimpleDateFormat('yyyy-MM-dd').format(date)
+        date == null ? '—' : new java.text.SimpleDateFormat('MM/dd/yyyy').format(date)
     }
 
     UiBlockSpecifier buildFreeCadPartBlockShow(PlmFreeCadPart part, Long partVersion, boolean isMail = false, boolean isHistory = false) {
@@ -394,7 +410,13 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
 
         log.info "Showing ${part}"
 
-        // Persistent part summary, shown alongside the six content tabs.
+        // Full-width title ABOVE both the preview and the tabbed content.
+        String partTitleHtml = """<div class="plm-part-name" style="font-size:clamp(24px,2.3vw,34px);font-weight:700;line-height:1.3;overflow-wrap:anywhere;padding:12px 16px 8px;">${PlmFreeCadUiService.escapeSummaryHtml(part.originalName ?: part.label ?: 'Unnamed Part')}</div>"""
+        def showPartTitle = new UiShowSpecifier().ui {
+            field partTitleHtml
+        }
+
+        // Persistent preview and summary, shown alongside the six content tabs.
         def showPreview = new UiShowSpecifier().ui {
             field """<div style="text-align:center;padding:12px;"><img style="width:100%;max-width:340px;height:auto;object-fit:contain;" src="/plm/previewPart/${part.id ?: 0}?partVersion=${part.computedVersion ?: 0}&timestamp=${part.mTimeNs}"></div>"""
         }
@@ -423,46 +445,41 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             section 'Part Summary', {
                 field summaryHtml
                 if (!part.active) field Style.EMPHASIS + Style.RED, tr('not.active.label')
-                if (!isHistory && part.active == true && part.nextVersion == null) {
-                    showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPart as MC, part.id
-                }
                 showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
             }
         }
 
-        // Render every field in ONE table, including the original fields.
-        // Mixing fieldLabeled rows with a custom nested table creates
-        // incompatible label/value column positions in Taack.
+        // Two side-by-side label/value groups with a narrow spacer column.
+        // All rows use the same table and remain visible when values are empty.
         String metadataHtml = """<style>
-            .plm-metadata-table tbody tr:nth-child(odd) { background-color: rgba(255,255,255,0.045); }
-            .plm-metadata-table tbody tr:nth-child(even) { background-color: rgba(255,255,255,0.012); }
-            .plm-metadata-table tbody tr:hover { background-color: rgba(100,160,220,0.12); }
-            </style><table class="plm-metadata-table" style="width:100%;border-collapse:collapse;table-layout:fixed;"><tbody>
-                    ${PlmFreeCadUiService.metadataRow('Part Name', part.originalName)}
-                    ${PlmFreeCadUiService.metadataRow('Label', part.label)}
-                    ${PlmFreeCadUiService.metadataRow('Description 1', part.description1)}
-                    ${PlmFreeCadUiService.metadataRow('Description 2', part.description2)}
-                    ${PlmFreeCadUiService.metadataRow('Description 3', part.description3)}
-                    ${PlmFreeCadUiService.metadataRow('Cost', part.cost)}
-                    ${PlmFreeCadUiService.metadataRow('Weight', part.weight)}
-                    ${PlmFreeCadUiService.metadataRow('Material', part.material)}
-                    ${PlmFreeCadUiService.metadataRow('Supplier', part.supplier)}
-                    ${PlmFreeCadUiService.metadataRow('Surface Treatment', part.surfaceTreatment)}
-                    ${PlmFreeCadUiService.metadataRow('LOM', part.lom)}
-                    ${PlmFreeCadUiService.metadataRow('DCN', part.dcn)}
-                    ${PlmFreeCadUiService.metadataRow('Date Created', PlmFreeCadUiService.metadataDate(part.dateCreated))}
-                    ${PlmFreeCadUiService.metadataRow('User Created', part.userCreated?.username)}
-                    ${PlmFreeCadUiService.metadataRow('Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated))}
-                    ${PlmFreeCadUiService.metadataRow('User Updated', part.userUpdated?.username)}
-                    ${PlmFreeCadUiService.metadataRow('Embedded Com.', part.comment)}
-                    ${PlmFreeCadUiService.metadataRow('File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated))}
-                    ${PlmFreeCadUiService.metadataRow('File User Updated', part.plmFileUserUpdated)}
-                    ${PlmFreeCadUiService.metadataRow('File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated))}
-                    ${PlmFreeCadUiService.metadataRow('File User Created', part.plmFileUserCreated)}
-                    ${PlmFreeCadUiService.metadataRow('Content Type', part.plmContentType)}
-                    ${PlmFreeCadUiService.metadataRow('Locked By', part.lockedBy?.username)}
-                    ${PlmFreeCadUiService.metadataRow('Tags', part.documentCategory?.tags*.name?.join(', '))}
-        </tbody></table>"""
+            .plm-metadata-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+            .plm-metadata-table tbody tr:nth-child(odd) { background-color:rgba(255,255,255,0.045); }
+            .plm-metadata-table tbody tr:nth-child(even) { background-color:rgba(255,255,255,0.012); }
+            .plm-metadata-table tbody tr:hover { background-color:rgba(100,160,220,0.12); }
+            .plm-metadata-table td { padding:8px 10px; vertical-align:top; font-weight:normal; }
+            .plm-metadata-table .plm-meta-label { text-align:right; white-space:normal; }
+            .plm-metadata-table .plm-meta-value { text-align:left; overflow-wrap:anywhere; }
+            .plm-metadata-table .plm-meta-gap { padding:0; }
+            </style>
+            <table class="plm-metadata-table">
+                <colgroup>
+                    <col style="width:15%;"><col style="width:31%;">
+                    <col style="width:4%;">
+                    <col style="width:24%;"><col style="width:26%;">
+                </colgroup><tbody>
+                    ${PlmFreeCadUiService.metadataPairRow('Label', part.label, 'Date Created', PlmFreeCadUiService.metadataDate(part.dateCreated))}
+                    ${PlmFreeCadUiService.metadataPairRow('Description 1', part.description1, 'User Created', part.userCreated?.username)}
+                    ${PlmFreeCadUiService.metadataPairRow('Description 2', part.description2, 'Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated))}
+                    ${PlmFreeCadUiService.metadataPairRow('Description 3', part.description3, 'User Updated', part.userUpdated?.username)}
+                    ${PlmFreeCadUiService.metadataPairRow('Cost', part.cost, 'Embedded Com.', part.comment)}
+                    ${PlmFreeCadUiService.metadataPairRow('Weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated))}
+                    ${PlmFreeCadUiService.metadataPairRow('Material', part.material, 'File User Updated', part.plmFileUserUpdated)}
+                    ${PlmFreeCadUiService.metadataPairRow('Supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated))}
+                    ${PlmFreeCadUiService.metadataPairRow('Surface Treatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated)}
+                    ${PlmFreeCadUiService.metadataPairRow('LOM', part.lom, 'Content Type', part.plmContentType)}
+                    ${PlmFreeCadUiService.metadataPairRow('DCN', part.dcn, 'Locked By', part.lockedBy?.username)}
+                </tbody>
+            </table>"""
 
         def showMetadata = new UiShowSpecifier().ui {
             section 'Part Metadata', {
@@ -471,6 +488,8 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         }
 
         UiBlockSpecifier b = new UiBlockSpecifier().ui {
+            // Outside the row so the title spans both columns.
+            show showPartTitle
             row {
                 col BlockSpec.Width.QUARTER, {
                     show showPreview, {
