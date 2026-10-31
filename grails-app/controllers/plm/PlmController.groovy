@@ -132,6 +132,50 @@ class PlmController implements WebAttributes {
         }
         taackUiService.ajaxReload()
     }
+    
+    
+    /**
+    * Release a WIP part.
+    *
+    * A released part's CAD content becomes immutable.
+    * Business metadata remains editable.
+    */
+    @Transactional
+    @Secured(['ROLE_ADMIN', 'ROLE_PLM_USER'])
+    def releasePart(PlmFreeCadPart part) {
+
+        if (part == null || part.active != true || part.nextVersion != null) {
+            render(status: 404, text: 'Active PLM part not found.')
+            return
+        }
+
+        if (part.lifecycleState != PlmPartLifecycleState.WIP) {
+            render(
+                status: 409,
+                text: 'Only WIP parts can be released. Cancel checkout first.'
+            )
+            return
+        }
+
+        crew.User user = springSecurityService.currentUser as crew.User
+
+        if (user == null) {
+            render(status: 403, text: 'You must be logged in to release a part.')
+            return
+        }
+
+        try {
+            plmPartLifecycleService.releasePart(part.id, user)
+        } catch (IllegalStateException e) {
+            render(
+                status: 403,
+                text: e.message ?: 'You do not have permission to release this part.'
+            )
+            return
+        }
+
+        taackUiService.ajaxReload()
+    }
 
     def addComment(PlmFreeCadPart part) {
         taackUiService.show(new UiBlockSpecifier().ui {

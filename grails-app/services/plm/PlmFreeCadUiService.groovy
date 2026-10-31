@@ -477,11 +477,41 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
               </tbody>
             </table>
         """
+        // Release is available only for the current active WIP part.
+        boolean canShowRelease =
+                !isMail &&
+                !isHistory &&
+                partVersion == null &&
+                part.active == true &&
+                part.nextVersion == null &&
+                (part.lifecycleState ?: PlmPartLifecycleState.WIP) ==
+                        PlmPartLifecycleState.WIP
+
         def showSummary = new UiShowSpecifier().ui {
+
             section 'Part Summary', {
+
                 field summaryHtml
-                if (!part.active) field Style.EMPHASIS + Style.RED, tr('not.active.label')
-                showAction ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT, PlmController.&editPartCategory as MC, part.id
+
+                if (!part.active) {
+                    field Style.EMPHASIS + Style.RED, tr('not.active.label')
+                }
+
+                // Existing category editing button.
+                showAction(
+                    ActionIcon.EDIT * IconStyle.SCALE_DOWN * IconStyle.LEFT,
+                    PlmController.&editPartCategory as MC,
+                    part.id
+                )
+
+                // Release button.
+                if (canShowRelease) {
+                    showAction(
+                        'Release Part',
+                        PlmController.&releasePart as MC,
+                        part.id
+                    )
+                }
             }
         }
 
