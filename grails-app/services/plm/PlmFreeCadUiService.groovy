@@ -338,7 +338,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                     .setSortOrder(TaackFilter.Order.DESC, p.dateCreated_)
                     .addFilter(f)
 
-            if (freeCadParts) {
+            if (freeCadParts != null) {
                 tfb.addRestrictedIds(freeCadParts*.id as Long[])
             }
 
