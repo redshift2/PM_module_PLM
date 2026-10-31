@@ -1,0 +1,15 @@
+/* Load this stylesheet from the SHARED Taack/Grails layout on every PLM page.
+   It must not be injected only into the Part Metadata tab. */
+html, body { overflow-x: clip; }
+header.navbar,
+nav.navbar,
+.navbar.navbar-expand-lg,
+body > header,
+body > nav.navbar {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 1100 !important;
+}
+/* If the header is inside a parent with overflow:auto/hidden, sticky may not
+   follow window scrolling. In that case, move the rule to the actual scroll
+   container's header or make the shared header fixed and offset the content. */

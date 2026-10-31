@@ -320,6 +320,11 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                     sortableFieldHeader p.label_
                     label 'Lifecycle State'
                 }
+                label 'Description 1'
+                label 'Description 2'
+                label 'Description 3'
+                label 'LOM'
+                label 'DCN'
                 label tr('tags.label')
             }
             def f = new UiFilterSpecifier().sec PlmFreeCadPart, {
@@ -338,7 +343,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             }
 
             iterate(tfb.build()) { PlmFreeCadPart obj ->
-                rowFieldRaw """${this.plmFreeCadSecurityService.canDownloadFile(obj) ? """<div style="text-align: center;"><img style="max-height: 64px; max-width: 64px;" src="/plm/previewPart/${obj.id ?: 0}?partVersion=${obj.computedVersion ?: 0}&timestamp=${obj.mTimeNs}"></div>""" : "<span />"}"""
+                rowFieldRaw """${this.plmFreeCadSecurityService.canDownloadFile(obj) ? """<div style="text-align: center;"><a href="/plm/showPart?id=${obj.id}" title="Open part details" style="display:inline-block;cursor:pointer;"><img style="max-height: 64px; max-width: 64px;" src="/plm/previewPart/${obj.id ?: 0}?partVersion=${obj.computedVersion ?: 0}&amp;timestamp=${obj.mTimeNs}" alt="Part preview"></a></div>""" : "<span />"}"""
                 rowColumn {
                     rowField obj.dateCreated_
                     rowField obj.userCreated.username
@@ -358,6 +363,11 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                     rowAction obj.label, PlmController.&showPart as MC, obj.id
                     rowField obj.lifecycleState?.toString() ?: 'WIP'
                 }
+                rowField obj.description1 ?: '—'
+                rowField obj.description2 ?: '—'
+                rowField obj.description3 ?: '—'
+                rowField obj.lom?.toString() ?: '—'
+                rowField obj.dcn ?: '—'
                 rowField obj.documentCategory?.tags*.name?.join(', ')
             }
         }
@@ -396,6 +406,32 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             <td class="plm-meta-label">${rightLabelHtml}</td>
             <td class="plm-meta-value">${rightValueHtml}</td>
         </tr>"""
+    }
+
+    private static String inlineMetaValue(String name, Object value, boolean multiline = false) {
+        String raw = value == null ? '' : value.toString()
+        String display = raw.trim() ? escapeSummaryHtml(raw) : '—'
+        String safe = escapeSummaryHtml(raw)
+        String control = multiline
+                ? """<textarea class="plm-edit-field" name="${name}" rows="2">${safe}</textarea>"""
+                : """<input class="plm-edit-field" name="${name}" value="${safe}" type="text">"""
+        if (name == 'lom') {
+            control = """<select class="plm-edit-field" name="lom">
+                <option value="">—</option>
+                ${['A', 'B', 'C', 'P'].collect { String v -> "<option value='${v}' ${raw == v ? 'selected' : ''}>${v}</option>" }.join('')}
+            </select>"""
+        }
+        return """<span class="plm-read-value">${display}</span>${control}"""
+    }
+
+    private static String inlineMetaRow(String label, String name, Object value,
+                                        String rightLabel, Object rightValue, boolean multiline = false) {
+        String right = rightLabel == null ? '' : (rightValue == null || !rightValue.toString().trim() ? '—' : escapeSummaryHtml(rightValue.toString()))
+        return """<tr><td class="plm-meta-label">${escapeSummaryHtml(label)}</td>
+          <td class="plm-meta-value">${inlineMetaValue(name, value, multiline)}</td>
+          <td class="plm-meta-gap"></td>
+          <td class="plm-meta-label">${escapeSummaryHtml(rightLabel ?: '')}</td>
+          <td class="plm-meta-value">${right}</td></tr>"""
     }
 
     private static String metadataDate(Date date) {
@@ -451,35 +487,81 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
 
         // Two side-by-side label/value groups with a narrow spacer column.
         // All rows use the same table and remain visible when values are empty.
+        // Metadata edit mode stays inside the existing tab; no modal is opened.
+        String metadataSaveUrl = new Parameter().urlMapped(PlmController.&savePartMetadata as MC, [id: part.id])
+        String rows = [
+            PlmFreeCadUiService.metadataPairRow('Label', part.label, 'Date Created', PlmFreeCadUiService.metadataDate(part.dateCreated)),
+            PlmFreeCadUiService.inlineMetaRow('Description 1', 'description1', part.description1, 'User Created', part.userCreated?.username, true),
+            PlmFreeCadUiService.inlineMetaRow('Description 2', 'description2', part.description2, 'Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated), true),
+            PlmFreeCadUiService.inlineMetaRow('Description 3', 'description3', part.description3, 'User Updated', part.userUpdated?.username, true),
+            PlmFreeCadUiService.inlineMetaRow('Cost', 'cost', part.cost, 'Embedded Com.', part.comment),
+            PlmFreeCadUiService.inlineMetaRow('Weight', 'weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated)),
+            PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated),
+            PlmFreeCadUiService.inlineMetaRow('Supplier', 'supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated)),
+            PlmFreeCadUiService.inlineMetaRow('Surface Treatment', 'surfaceTreatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated),
+            PlmFreeCadUiService.inlineMetaRow('LOM', 'lom', part.lom, 'Content Type', part.plmContentType),
+            PlmFreeCadUiService.inlineMetaRow('DCN', 'dcn', part.dcn, 'Locked By', part.lockedBy?.username)
+        ].join('')
         String metadataHtml = """<style>
-            .plm-metadata-table { width:100%; border-collapse:collapse; table-layout:fixed; }
-            .plm-metadata-table tbody tr:nth-child(odd) { background-color:rgba(255,255,255,0.045); }
-            .plm-metadata-table tbody tr:nth-child(even) { background-color:rgba(255,255,255,0.012); }
-            .plm-metadata-table tbody tr:hover { background-color:rgba(100,160,220,0.12); }
-            .plm-metadata-table td { padding:8px 10px; vertical-align:top; font-weight:normal; }
-            .plm-metadata-table .plm-meta-label { text-align:right; white-space:normal; }
-            .plm-metadata-table .plm-meta-value { text-align:left; overflow-wrap:anywhere; }
-            .plm-metadata-table .plm-meta-gap { padding:0; }
-            </style>
-            <table class="plm-metadata-table">
-                <colgroup>
-                    <col style="width:15%;"><col style="width:31%;">
-                    <col style="width:4%;">
-                    <col style="width:24%;"><col style="width:26%;">
-                </colgroup><tbody>
-                    ${PlmFreeCadUiService.metadataPairRow('Label', part.label, 'Date Created', PlmFreeCadUiService.metadataDate(part.dateCreated))}
-                    ${PlmFreeCadUiService.metadataPairRow('Description 1', part.description1, 'User Created', part.userCreated?.username)}
-                    ${PlmFreeCadUiService.metadataPairRow('Description 2', part.description2, 'Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated))}
-                    ${PlmFreeCadUiService.metadataPairRow('Description 3', part.description3, 'User Updated', part.userUpdated?.username)}
-                    ${PlmFreeCadUiService.metadataPairRow('Cost', part.cost, 'Embedded Com.', part.comment)}
-                    ${PlmFreeCadUiService.metadataPairRow('Weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated))}
-                    ${PlmFreeCadUiService.metadataPairRow('Material', part.material, 'File User Updated', part.plmFileUserUpdated)}
-                    ${PlmFreeCadUiService.metadataPairRow('Supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated))}
-                    ${PlmFreeCadUiService.metadataPairRow('Surface Treatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated)}
-                    ${PlmFreeCadUiService.metadataPairRow('LOM', part.lom, 'Content Type', part.plmContentType)}
-                    ${PlmFreeCadUiService.metadataPairRow('DCN', part.dcn, 'Locked By', part.lockedBy?.username)}
-                </tbody>
-            </table>"""
+          .plm-metadata-table { width:100%;border-collapse:collapse;table-layout:fixed; }
+          .plm-metadata-table tbody tr:nth-child(odd) { background:rgba(255,255,255,.045); }
+          .plm-metadata-table tbody tr:nth-child(even) { background:rgba(255,255,255,.012); }
+          .plm-metadata-table tbody tr:hover { background:rgba(100,160,220,.12); }
+          .plm-metadata-table td { padding:8px 10px;vertical-align:top;font-weight:normal; }
+          .plm-metadata-table .plm-meta-label { text-align:right; }
+          .plm-metadata-table .plm-meta-value { text-align:left;overflow-wrap:anywhere; }
+          .plm-metadata-table .plm-meta-gap { padding:0; }
+          .plm-edit-field { display:none;box-sizing:border-box;width:100%;background:#202830;color:#f1f5f9;border:1px solid #64748b;border-radius:4px;padding:6px 8px; }
+          .plm-editing .plm-edit-field { display:block; }
+          .plm-editing .plm-read-value { display:none; }
+          .plm-meta-buttons { display:flex;justify-content:flex-end;gap:8px;padding:8px 12px; }
+          .plm-meta-buttons button { border:1px solid #64748b;background:#334155;color:white;border-radius:4px;padding:6px 14px;cursor:pointer; }
+          .plm-meta-buttons .plm-save { background:#1768b6; }
+          </style>
+          <div class="plm-inline-meta" data-save="${PlmFreeCadUiService.escapeSummaryHtml(metadataSaveUrl)}">
+            <div class="plm-meta-buttons">
+              <button type="button" class="plm-edit" onclick="this.closest('.plm-inline-meta').classList.add('plm-editing')">✎ Edit</button>
+              <button type="button" class="plm-save" style="display:none" onclick="plmSaveMetadata(this)">Save</button>
+              <button type="button" class="plm-cancel" style="display:none" onclick="plmCancelMetadata(this)">Cancel</button>
+            </div>
+            <div class="plm-meta-error" role="alert" style="color:#ff9999;padding:0 12px;"></div>
+            <table class="plm-metadata-table"><colgroup>
+              <col style="width:15%"><col style="width:31%"><col style="width:4%"><col style="width:24%"><col style="width:26%">
+            </colgroup><tbody>${rows}</tbody></table>
+          </div>
+          <script>
+          (function(){
+            if(window.plmInlineMetadataInstalled)return;
+            window.plmInlineMetadataInstalled=true;
+            window.plmCancelMetadata=function(button){
+              var box=button.closest('.plm-inline-meta');
+              box.querySelectorAll('.plm-edit-field').forEach(function(input){if(input.tagName==='SELECT'){var initial=input.querySelector('option[selected]');input.value=initial?initial.value:'';}else{input.value=input.defaultValue || '';}});
+              box.classList.remove('plm-editing');
+              box.querySelector('.plm-meta-error').textContent='';
+              plmToggleMetadataButtons(box);
+            };
+            window.plmToggleMetadataButtons=function(box){
+              var editing=box.classList.contains('plm-editing');
+              box.querySelector('.plm-edit').style.display=editing?'none':'';
+              box.querySelector('.plm-save').style.display=editing?'':'none';
+              box.querySelector('.plm-cancel').style.display=editing?'':'none';
+            };
+            window.plmSaveMetadata=function(button){
+              var box=button.closest('.plm-inline-meta'),data=new URLSearchParams();
+              box.querySelectorAll('.plm-edit-field').forEach(function(input){data.append(input.name,input.value);});
+              var csrf=document.querySelector('meta[name="_csrf"]');
+              if(csrf)data.append('_csrf',csrf.content);
+              button.disabled=true;
+              box.querySelector('.plm-meta-error').textContent='';
+              fetch(box.dataset.save,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','X-Requested-With':'XMLHttpRequest'},body:data.toString()})
+                .then(function(response){if(!response.ok)return response.text().then(function(body){throw new Error(body.replace(/<[^>]*>/g,' ').slice(0,250)||('HTTP '+response.status));});window.location.reload();})
+                .catch(function(error){box.querySelector('.plm-meta-error').textContent=error.message;button.disabled=false;});
+            };
+            document.addEventListener('click',function(event){
+              if(event.target.matches('.plm-inline-meta .plm-edit'))plmToggleMetadataButtons(event.target.closest('.plm-inline-meta'));
+            });
+          })();
+          </script>"""
 
         def showMetadata = new UiShowSpecifier().ui {
             section 'Part Metadata', {
@@ -502,7 +584,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                     tabs {
                         tab('Part Metadata') {
                             show showMetadata, {
-                                if (!isHistory) menuIcon ActionIcon.EDIT, PlmController.&editPartMetadata as MC, part.id
+                                // Metadata edit controls are inside the table, not a modal.
                             }
                         }
                         if (!isMail && !isHistory) {

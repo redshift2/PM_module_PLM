@@ -87,7 +87,7 @@ class PlmController implements WebAttributes {
         }
 
         taackUiService.show(new UiBlockSpecifier().ui {
-            tableFilter(plmFreeCadUiService.buildPartFilter(), plmFreeCadUiService.buildPartTable(null, f), {
+            table(plmFreeCadUiService.buildPartTable(null, f), {
                 menuIcon ActionIcon.GRAPH, this.&model as MC
             })
         }, buildMenu())
@@ -104,7 +104,7 @@ class PlmController implements WebAttributes {
             filterFieldExpressionReverse(link.part_, true, new FilterExpression(null as Object, Operator.NE, link.part_))
         }
         taackUiService.show(new UiBlockSpecifier().ui {
-            tableFilter(plmFreeCadUiService.buildPartFilter(), plmFreeCadUiService.buildPartTable(null, f), {
+            table(plmFreeCadUiService.buildPartTable(null, f), {
                 menuIcon ActionIcon.GRAPH, this.&model as MC
             })
         }, buildMenu())
@@ -119,7 +119,7 @@ class PlmController implements WebAttributes {
         }
 
         taackUiService.show(new UiBlockSpecifier().ui {
-            tableFilter(plmFreeCadUiService.buildPartFilter(), plmFreeCadUiService.buildPartTable(null, f), {
+            table(plmFreeCadUiService.buildPartTable(null, f), {
                 menuIcon ActionIcon.GRAPH, this.&model as MC
             })
         }, buildMenu())
