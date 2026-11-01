@@ -9,6 +9,9 @@ import grails.plugin.springsecurity.annotation.Secured
 import org.springframework.beans.factory.annotation.Value
 import grails.gorm.transactions.Transactional
 import attachment.DocumentCategory
+import org.springframework.context.ApplicationContext
+import org.springframework.web.context.support.WebApplicationContextUtils
+import jakarta.servlet.ServletContext
 
 @GrailsCompileStatic
 @Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
@@ -36,6 +39,8 @@ class PlmJsonController {
     PlmFreeCadSecurityService plmFreeCadSecurityService
     SpringSecurityService springSecurityService
     PlmPartLifecycleService plmPartLifecycleService
+    ApplicationContext applicationContext
+    ServletContext servletContext
 
     @Value('${grails.controllers.upload.maxFileSize}')
     Long maximumFileUploadSize
@@ -112,6 +117,32 @@ class PlmJsonController {
     // Returns server information and supported features.
     // ---------------------------------------------------------
 
+    /**
+     * Report the presence of the optional Workspace Grails plugin.
+     * No compile-time dependency on the workspace module is required.
+     */
+    private boolean isGlobalWorkspaceAvailable() {
+        ApplicationContext ctx = applicationContext
+        if (ctx == null && servletContext != null) {
+            ctx = WebApplicationContextUtils.getWebApplicationContext(servletContext)
+        }
+        if (ctx == null) {
+            log.warn("Global Workspace detection: Spring application context unavailable")
+            return false
+        }
+
+        // Grails plugins may namespace their service bean names.
+        boolean found = ctx.beanDefinitionNames.any { String beanName ->
+            String normalized = beanName.toLowerCase(java.util.Locale.ROOT)
+            normalized.contains('plmworkspacesecurityservice') ||
+                    normalized.contains('plmworkspaceservice')
+        }
+        if (!found) {
+            log.warn("Global Workspace detection: no Workspace service bean found")
+        }
+        return found
+    }
+
     def serverInfo() {
 
          // -----------------------------------------------------
@@ -158,6 +189,10 @@ class PlmJsonController {
 
         if (FEATURE_PART_HISTORY) {
             features.add("partHistory")
+        }
+
+        if (isGlobalWorkspaceAvailable()) {
+            features.add("globalWorkspace")
         }
 
         Map<String, Object> result = [
