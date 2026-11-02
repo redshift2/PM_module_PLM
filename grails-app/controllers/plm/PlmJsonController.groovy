@@ -681,14 +681,9 @@ def workspaceParts() {
                     lifecycleState: part.lifecycleState?.name(),
                     checkedOutBy: part.checkedOutBy?.username,
                     canCheckOut: (
-                        ((PlmFreeCadPart) plmPart).lifecycleState ==
-                                PlmPartLifecycleState.RELEASED
-                            ? plmFreeCadSecurityService.canCreateRevision(
-                                    (PlmFreeCadPart) plmPart, user
-                              )
-                            : plmFreeCadSecurityService.canCheckOutPart(
-                                    (PlmFreeCadPart) plmPart, user
-                              )
+                        part.lifecycleState == PlmPartLifecycleState.RELEASED
+                            ? plmFreeCadSecurityService.canCreateRevision(part, user)
+                            : plmFreeCadSecurityService.canCheckOutPart(part, user)
                     ),
                     canCheckIn: plmFreeCadSecurityService
                             .canUploadPart(part, user),
