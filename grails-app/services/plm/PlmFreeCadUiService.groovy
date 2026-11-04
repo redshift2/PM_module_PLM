@@ -10,6 +10,8 @@ import grails.config.Config
 import grails.core.support.GrailsConfigurationAware
 import grails.web.api.WebAttributes
 import jakarta.annotation.PostConstruct
+import javax.sql.DataSource
+import org.springframework.jdbc.core.JdbcTemplate
 import org.codehaus.groovy.runtime.MethodClosure as MC
 import taack.ast.type.FieldInfo
 import taack.domain.TaackAttachmentService
@@ -61,6 +63,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         errorsInit.add message
     }
 
+    DataSource dataSource
     TaackFilterService taackFilterService
     AttachmentUiService attachmentUiService
     TaackAttachmentService taackAttachmentService
@@ -408,7 +411,46 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         </tr>"""
     }
 
-    private static String inlineMetaValue(String name, Object value, boolean multiline = false) {
+    /** Read-only catalogue lookup; no PLM records are stored in the Materials module. */
+    private String materialSelectorHtml(String currentMaterial) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource)
+        List<Map<String, Object>> categories = jdbc.queryForList(
+                'SELECT id, name, parent_id FROM pm_material_category WHERE active = TRUE ORDER BY name')
+        List<Map<String, Object>> materials = jdbc.queryForList(
+                'SELECT id, name, category_id FROM pm_material WHERE active = TRUE ORDER BY name')
+        String selectedCategory = ''
+        for (Map<String, Object> m : materials) {
+            if (m.name?.toString()?.equalsIgnoreCase(currentMaterial?.trim())) {
+                selectedCategory = m.category_id.toString()
+                break
+            }
+        }
+        String categoryOptions = '<option value="">Select category...</option>'
+        for (Map<String, Object> cat : categories) {
+            String id = cat.id.toString()
+            String label = cat.name.toString()
+            categoryOptions += "<option value=\"${escapeSummaryHtml(id)}\" ${id == selectedCategory ? 'selected' : ''}>${escapeSummaryHtml(label)}</option>"
+        }
+        String materialOptions = '<option value="">Select material...</option>'
+        for (Map<String, Object> m : materials) {
+            String name = m.name.toString()
+            String categoryId = m.category_id.toString()
+            String safe = escapeSummaryHtml(name)
+            String selected = (categoryId == selectedCategory && name.equalsIgnoreCase(currentMaterial?.trim())) ? 'selected' : ''
+            materialOptions += "<option data-category=\"${escapeSummaryHtml(categoryId)}\" value=\"${safe}\" ${selected}>${safe}</option>"
+        }
+        // Keep a legacy value visible until the user selects a valid catalogue material.
+        if (currentMaterial?.trim() && !selectedCategory) {
+            String safeLegacy = escapeSummaryHtml(currentMaterial.trim())
+            materialOptions += "<option value=\"${safeLegacy}\" selected data-legacy=\"true\">${safeLegacy} (not in catalogue)</option>"
+        }
+        return """<div class="plm-material-selector">
+          <select class="plm-material-category plm-edit-field" aria-label="Material category" data-initial="${escapeSummaryHtml(selectedCategory)}" onchange="plmFilterMaterials(this)">${categoryOptions}</select>
+          <select class="plm-material-choice plm-edit-field" name="material" aria-label="Material" data-initial="${escapeSummaryHtml(currentMaterial ?: '')}">${materialOptions}</select>
+        </div>"""
+    }
+
+    private static String inlineMetaValue(String name, Object value, boolean multiline = false, String customControl = null) {
         String raw = value == null ? '' : value.toString()
         String display = raw.trim() ? escapeSummaryHtml(raw) : '—'
         String safe = escapeSummaryHtml(raw)
@@ -421,14 +463,15 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
                 ${['A', 'B', 'C', 'P'].collect { String v -> "<option value='${v}' ${raw == v ? 'selected' : ''}>${v}</option>" }.join('')}
             </select>"""
         }
+        if (customControl != null) control = customControl
         return """<span class="plm-read-value">${display}</span>${control}"""
     }
 
     private static String inlineMetaRow(String label, String name, Object value,
-                                        String rightLabel, Object rightValue, boolean multiline = false) {
+                                        String rightLabel, Object rightValue, boolean multiline = false, String customControl = null) {
         String right = rightLabel == null ? '' : (rightValue == null || !rightValue.toString().trim() ? '—' : escapeSummaryHtml(rightValue.toString()))
         return """<tr><td class="plm-meta-label">${escapeSummaryHtml(label)}</td>
-          <td class="plm-meta-value">${inlineMetaValue(name, value, multiline)}</td>
+          <td class="plm-meta-value">${inlineMetaValue(name, value, multiline, customControl)}</td>
           <td class="plm-meta-gap"></td>
           <td class="plm-meta-label">${escapeSummaryHtml(rightLabel ?: '')}</td>
           <td class="plm-meta-value">${right}</td></tr>"""
@@ -526,7 +569,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             PlmFreeCadUiService.inlineMetaRow('Description 3', 'description3', part.description3, 'User Updated', part.userUpdated?.username, true),
             PlmFreeCadUiService.inlineMetaRow('Cost', 'cost', part.cost, 'Embedded Com.', part.comment),
             PlmFreeCadUiService.inlineMetaRow('Weight', 'weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated)),
-            PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated),
+            PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated, false, materialSelectorHtml(part.material)),
             PlmFreeCadUiService.inlineMetaRow('Supplier', 'supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated)),
             PlmFreeCadUiService.inlineMetaRow('Surface Treatment', 'surfaceTreatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated),
             PlmFreeCadUiService.inlineMetaRow('LOM', 'lom', part.lom, 'Content Type', part.plmContentType),
@@ -543,6 +586,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
           .plm-metadata-table .plm-meta-gap { padding:0; }
           .plm-edit-field { display:none;box-sizing:border-box;width:100%;background:#202830;color:#f1f5f9;border:1px solid #64748b;border-radius:4px;padding:6px 8px; }
           .plm-editing .plm-edit-field { display:block; }
+          .plm-material-selector { display:flex;flex-direction:column;gap:6px; }
           .plm-editing .plm-read-value { display:none; }
           .plm-meta-buttons { display:flex;justify-content:flex-end;gap:8px;padding:8px 12px; }
           .plm-meta-buttons button { border:1px solid #64748b;background:#334155;color:white;border-radius:4px;padding:6px 14px;cursor:pointer; }
@@ -563,15 +607,28 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
           (function(){
             if(window.plmInlineMetadataInstalled)return;
             window.plmInlineMetadataInstalled=true;
+            window.plmFilterMaterials=function(categorySelect){
+              var box=categorySelect.closest('.plm-material-selector');
+              var materialSelect=box.querySelector('.plm-material-choice');
+              var category=categorySelect.value;
+              Array.prototype.forEach.call(materialSelect.options,function(option){
+                var visible=!option.value || (category && option.dataset.category===category);
+                option.hidden=!visible;
+                option.disabled=!visible;
+              });
+              if(materialSelect.selectedOptions.length && materialSelect.selectedOptions[0].disabled){materialSelect.value='';}
+            };
             window.plmCancelMetadata=function(button){
               var box=button.closest('.plm-inline-meta');
               box.querySelectorAll('.plm-edit-field').forEach(function(input){if(input.tagName==='SELECT'){var initial=input.querySelector('option[selected]');input.value=initial?initial.value:'';}else{input.value=input.defaultValue || '';}});
+              var cat=box.querySelector('.plm-material-category');if(cat)plmFilterMaterials(cat);
               box.classList.remove('plm-editing');
               box.querySelector('.plm-meta-error').textContent='';
               plmToggleMetadataButtons(box);
             };
             window.plmToggleMetadataButtons=function(box){
               var editing=box.classList.contains('plm-editing');
+              if(editing){var cat=box.querySelector('.plm-material-category');if(cat)plmFilterMaterials(cat);}
               box.querySelector('.plm-edit').style.display=editing?'none':'';
               box.querySelector('.plm-save').style.display=editing?'':'none';
               box.querySelector('.plm-cancel').style.display=editing?'':'none';

@@ -281,6 +281,21 @@ class PlmController implements WebAttributes {
             values[name] = value ?: null
         }
 
+        // Reject material values that are not in the active Materials Library catalogue.
+        String requestedMaterial = values.material
+        if (requestedMaterial) {
+            JdbcTemplate catalogueJdbc = new JdbcTemplate(dataSource)
+            Integer found = catalogueJdbc.queryForObject('''
+                SELECT COUNT(*) FROM pm_material m
+                JOIN pm_material_category c ON c.id = m.category_id
+                WHERE LOWER(m.name) = LOWER(?) AND m.active = TRUE AND c.active = TRUE
+            ''', Integer, requestedMaterial)
+            if (!found || found < 1) {
+                render(status: 400, text: 'Select an active material from the Materials Library.')
+                return
+            }
+        }
+
         BigDecimal cost = null
         BigDecimal weight = null
         try {
