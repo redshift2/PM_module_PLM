@@ -411,6 +411,13 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
         </tr>"""
     }
 
+    /** Optional Materials Library detection; no compile-time dependency. */
+    private boolean isMaterialLibraryAvailable() {
+        return grailsApplication != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
+    }
+
     /** Read-only catalogue lookup; no PLM records are stored in the Materials module. */
     private String materialSelectorHtml(String currentMaterial) {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource)
@@ -569,7 +576,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             PlmFreeCadUiService.inlineMetaRow('Description 3', 'description3', part.description3, 'User Updated', part.userUpdated?.username, true),
             PlmFreeCadUiService.inlineMetaRow('Cost', 'cost', part.cost, 'Embedded Com.', part.comment),
             PlmFreeCadUiService.inlineMetaRow('Weight', 'weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated)),
-            PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated, false, materialSelectorHtml(part.material)),
+            PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated, false, isMaterialLibraryAvailable() ? materialSelectorHtml(part.material) : null),
             PlmFreeCadUiService.inlineMetaRow('Supplier', 'supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated)),
             PlmFreeCadUiService.inlineMetaRow('Surface Treatment', 'surfaceTreatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated),
             PlmFreeCadUiService.inlineMetaRow('LOM', 'lom', part.lom, 'Content Type', part.plmContentType),
@@ -635,7 +642,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             };
             window.plmSaveMetadata=function(button){
               var box=button.closest('.plm-inline-meta'),data=new URLSearchParams();
-              box.querySelectorAll('.plm-edit-field').forEach(function(input){data.append(input.name,input.value);});
+              box.querySelectorAll('.plm-edit-field').forEach(function(input){if(input.name)data.append(input.name,input.value);});
               var csrf=document.querySelector('meta[name="_csrf"]');
               if(csrf)data.append('_csrf',csrf.content);
               button.disabled=true;

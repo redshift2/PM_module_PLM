@@ -3,6 +3,7 @@ package plm
 import attachment.Term
 import crew.User
 import grails.compiler.GrailsCompileStatic
+import grails.core.GrailsApplication
 import grails.converters.JSON
 import grails.plugin.springsecurity.SpringSecurityService
 import grails.plugin.springsecurity.annotation.Secured
@@ -40,6 +41,7 @@ class PlmJsonController {
     SpringSecurityService springSecurityService
     PlmPartLifecycleService plmPartLifecycleService
     ApplicationContext applicationContext
+    GrailsApplication grailsApplication
     ServletContext servletContext
 
     @Value('${grails.controllers.upload.maxFileSize}')
@@ -143,6 +145,13 @@ class PlmJsonController {
         return found
     }
 
+    /** Detect the optional Materials Library without importing its domain classes. */
+    private boolean isMaterialLibraryAvailable() {
+        return grailsApplication != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
+    }
+
     def serverInfo() {
 
          // -----------------------------------------------------
@@ -193,6 +202,10 @@ class PlmJsonController {
 
         if (isGlobalWorkspaceAvailable()) {
             features.add("globalWorkspace")
+        }
+
+        if (isMaterialLibraryAvailable()) {
+            features.add("materialLibrary")
         }
 
         Map<String, Object> result = [

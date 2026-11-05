@@ -281,9 +281,14 @@ class PlmController implements WebAttributes {
             values[name] = value ?: null
         }
 
+        // Keep free-text material editing when the optional Materials Library is absent.
+        boolean materialLibraryInstalled = grailsApplication != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
+                grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
+
         // Reject material values that are not in the active Materials Library catalogue.
         String requestedMaterial = values.material
-        if (requestedMaterial) {
+        if (materialLibraryInstalled && requestedMaterial) {
             JdbcTemplate catalogueJdbc = new JdbcTemplate(dataSource)
             Integer found = catalogueJdbc.queryForObject('''
                 SELECT COUNT(*) FROM pm_material m
