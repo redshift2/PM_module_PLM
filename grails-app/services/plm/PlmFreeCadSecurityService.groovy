@@ -9,7 +9,6 @@ import jakarta.annotation.PostConstruct
 import org.codehaus.groovy.runtime.MethodClosure
 import taack.app.TaackApp
 import taack.app.TaackAppRegisterService
-import taack.render.TaackUiEnablerService
 
 @GrailsCompileStatic
 class PlmFreeCadSecurityService {
@@ -30,33 +29,19 @@ class PlmFreeCadSecurityService {
         canEditFile(PlmFreeCadPart.get(id), springSecurityService.currentUser as User)
     }
 
+    /** Register the PLM navigation entry; the pages themselves use Grails GSP. */
     @PostConstruct
     void init() {
-        TaackUiEnablerService.securityClosure(
-                this.&securityCanDownloadClosure,
-                PlmController.&downloadBinPart as MethodClosure,
-                PlmController.&addComment as MethodClosure,
-                PlmController.&previewPart as MethodClosure,
-                PlmController.&editPart as MethodClosure,
-                PlmController.&editPartCategory as MethodClosure,
-                PlmController.&previewPart as MethodClosure,
-                PlmController.&previewAsciidoc as MethodClosure,
-                PlmController.&showPart as MethodClosure,
-                PlmController.&saveComment as MethodClosure
+        def iconStream = this.class.getResourceAsStream('/plm/plm.svg')
+        if (iconStream == null) {
+            throw new IllegalStateException('Missing PLM menu icon: /plm/plm.svg')
+        }
+        String svg = iconStream.withCloseable { stream ->
+            new String(stream.readAllBytes(), 'UTF-8')
+        }
+        TaackAppRegisterService.register(
+            new TaackApp(PlmController.&parts as MethodClosure, svg)
         )
-        TaackUiEnablerService.securityClosure(
-                this.&securityCanEditClosure,
-                PlmController.&editPart as MethodClosure,
-                PlmController.&editPartCategory as MethodClosure,
-                PlmController.&savePart as MethodClosure,
-                PlmController.&addAttachment as MethodClosure,
-                PlmController.&saveAttachment as MethodClosure,
-                PlmController.&importAttachment as MethodClosure,
-                PlmController.&savePartCategory as MethodClosure,
-                PlmController.&saveComment as MethodClosure
-        )
-
-        TaackAppRegisterService.register(new TaackApp(PlmController.&parts as MethodClosure, new String(this.class.getResourceAsStream("/plm/plm.svg").readAllBytes())))
     }
 
     // General editing permissions.

@@ -1,530 +1,297 @@
 package plm
 
-import attachement.AttachmentUiService
-import attachment.Attachment
 import attachment.DocumentCategory
-import attachment.config.AttachmentContentType
-import crew.config.SupportedLanguage
-import grails.compiler.GrailsCompileStatic
+import crew.User
 import grails.gorm.transactions.Transactional
 import grails.plugin.springsecurity.annotation.Secured
-import grails.web.api.WebAttributes
 import org.springframework.jdbc.core.JdbcTemplate
 import javax.sql.DataSource
-import org.codehaus.groovy.runtime.MethodClosure
-import org.codehaus.groovy.runtime.MethodClosure as MC
-import org.springframework.web.multipart.MultipartFile
-import org.springframework.web.multipart.MultipartHttpServletRequest
-import taack.ast.type.FieldInfo
-import taack.domain.TaackAttachmentService
-import taack.domain.TaackMetaModelService
-import taack.render.TaackEditorService
-import taack.render.TaackSaveService
-import taack.render.TaackUiService
-import taack.ui.TaackUi
-import taack.ui.dsl.*
-import taack.ui.dsl.common.ActionIcon
-import taack.ui.dsl.filter.expression.FilterExpression
-import taack.ui.dsl.filter.expression.Operator
-import taack.ui.dsl.form.editor.EditorOption
-import taack.wysiwyg.Asciidoc
-import taack.wysiwyg.TaackAsciidocPlantUML
-import taack.wysiwyg.TaackAsciidocTable
-import taack.wysiwyg.TaackBaseAsciidocSpans
 
-@GrailsCompileStatic
-@Secured(["ROLE_PLM_USER", "ROLE_ADMIN"])
-class PlmController implements WebAttributes {
-    grails.plugin.springsecurity.SpringSecurityService springSecurityService
+@Secured(['ROLE_PLM_USER', 'ROLE_ADMIN'])
+class PlmController {
+    def springSecurityService
     DataSource dataSource
     PlmFreeCadSecurityService plmFreeCadSecurityService
     PlmPartLifecycleService plmPartLifecycleService
-    TaackUiService taackUiService
     PlmFreeCadUiService plmFreeCadUiService
-    TaackMetaModelService taackMetaModelService
-    TaackSaveService taackSaveService
+    def taackAttachmentService
     PlmSearchService plmSearchService
-    TaackAttachmentService taackAttachmentService
-    AttachmentUiService attachmentUiService
-    ConvertersToAsciidocService convertersToAsciidocService
-    TaackEditorService taackEditorService
 
-    private UiMenuSpecifier buildMenu(String q = null) {
-        new UiMenuSpecifier().ui {
-            menu this.&parts as MC
-            menu this.&parentParts as MC
-            menu this.&obsoleteParts as MC
-            menuIcon ActionIcon.HELP, this.&doc as MC
-            menuSearch this.&search as MethodClosure, q
-            menuOptions(SupportedLanguage.fromContext())
-        }
+    def index() { redirect(action: 'parts') }
+
+    private List<PlmFreeCadPart> visible(List<PlmFreeCadPart> parts) {
+        parts.findAll { PlmFreeCadPart p -> plmFreeCadSecurityService.canDownloadFile(p) }
     }
 
-    def doc() {
-        taackUiService.show(taackEditorService.asciidocBlockSpecifier(PlmController.class, '/plm/plm.adoc'), buildMenu())
+    private Map listModel(String mode) {
+        int max = Math.min(Math.max(params.int('max') ?: 25, 1), 100)
+        int offset = Math.max(params.int('offset') ?: 0, 0)
+        String q = (params.q ?: '').toString().trim()
+        String pattern = '%' + q.toLowerCase(java.util.Locale.ROOT) + '%'
+        String condition = mode == 'obsolete' ? 'p.status = :obsolete' : 'p.status <> :obsolete'
+        String parentCondition = mode == 'parents' ? ''' AND NOT EXISTS (
+            SELECT l.id FROM PlmFreeCadLink l WHERE l.part = p AND l.parentPart.active = true
+        )''' : ''
+        List<PlmFreeCadPart> all = PlmFreeCadPart.executeQuery('''
+            SELECT DISTINCT p FROM PlmFreeCadPart p
+            WHERE p.active = true AND p.nextVersion IS NULL AND ''' + condition + parentCondition + '''
+              AND (:pattern = '%%' OR LOWER(COALESCE(p.originalName,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.label,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.description1,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.description2,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.description3,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.material,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.supplier,'')) LIKE :pattern
+                OR LOWER(COALESCE(p.dcn,'')) LIKE :pattern)
+            ORDER BY p.label ASC
+        ''', [obsolete: PlmFreeCadPartStatus.OBSOLETE, pattern:pattern])
+        List<PlmFreeCadPart> permitted = visible(all)
+        [parts:permitted.drop(offset).take(max), total:permitted.size(), max:max,
+         offset:offset, query:q, mode:mode]
     }
 
-    def index() {
-        if (PlmFreeCadUiService.errorsInit.size() > 0)
-            log.error('Following errors occurs when checking binaries:\n' + PlmFreeCadUiService.errorsInit.join('\n'))
+    def parts() { render(view:'parts', model:listModel('parts')) }
+    def parentParts() { render(view:'parts', model:listModel('parents')) }
+    def obsoleteParts() { render(view:'parts', model:listModel('obsolete')) }
+    def search(String q) { params.q = q ?: params.q; render(view:'parts', model:listModel('parts')) }
 
-        redirect action: 'parts'
+    private PlmFreeCadPart checkedPart(Long id) {
+        PlmFreeCadPart part = id == null ? null : PlmFreeCadPart.get(id)
+        if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) return null
+        part
     }
 
-    def downloadBinPart(PlmFreeCadPart part, Long partVersion) {
-        response.contentType = 'application/zip'
-        response.setHeader("Content-disposition", "filename=${URLEncoder.encode("${part.originalName}${partVersion ? "-v${partVersion}" : ''}-${TaackUiService.dateFileName}.zip", 'UTF-8')}")
-        response.outputStream << plmFreeCadUiService.zipPart(part, partVersion).bytes
-        response.outputStream.close()
-    }
+    def showPart(Long id, Long partVersion, Boolean isHistory) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
 
-    def parts() {
-        UiFilterSpecifier f = new UiFilterSpecifier().sec PlmFreeCadPart, {
-            PlmFreeCadPart p = new PlmFreeCadPart()
-            filterFieldExpressionBool(new FilterExpression(
-                    [PlmFreeCadPartStatus.OBSOLETE],
-                    Operator.NI, p.status_))
-        }
-
-        taackUiService.show(new UiBlockSpecifier().ui {
-            table(plmFreeCadUiService.buildPartTable(null, f), {
-                menuIcon ActionIcon.GRAPH, this.&model as MC
-            })
-        }, buildMenu())
-    }
-
-    def parentParts() {
-        UiFilterSpecifier f = new UiFilterSpecifier().sec PlmFreeCadPart, {
-            PlmFreeCadLink link = new PlmFreeCadLink()
-            PlmFreeCadPart p = new PlmFreeCadPart()
-            filterFieldExpressionBool(new FilterExpression(
-                    [PlmFreeCadPartStatus.OBSOLETE],
-                    Operator.NI, p.status_))
-
-            filterFieldExpressionReverse(link.part_, true, new FilterExpression(null as Object, Operator.NE, link.part_))
-        }
-        taackUiService.show(new UiBlockSpecifier().ui {
-            table(plmFreeCadUiService.buildPartTable(null, f), {
-                menuIcon ActionIcon.GRAPH, this.&model as MC
-            })
-        }, buildMenu())
-    }
-
-    def obsoleteParts() {
-        UiFilterSpecifier f = new UiFilterSpecifier().sec PlmFreeCadPart, {
-            PlmFreeCadPart p = new PlmFreeCadPart()
-            filterFieldExpressionBool(new FilterExpression(
-                    [PlmFreeCadPartStatus.OBSOLETE],
-                    Operator.IN, p.status_))
-        }
-
-        taackUiService.show(new UiBlockSpecifier().ui {
-            table(plmFreeCadUiService.buildPartTable(null, f), {
-                menuIcon ActionIcon.GRAPH, this.&model as MC
-            })
-        }, buildMenu())
-    }
-
-    @Transactional
-    def saveComment(PlmFreeCadPart part) {
-        if (part.id) {
-            part.comment = params['comment']
-        }
-        taackUiService.ajaxReload()
-    }
-    
-    
-    /**
-    * Release a WIP part.
-    *
-    * A released part's CAD content becomes immutable.
-    * Business metadata remains editable.
-    */
-    @Transactional
-    @Secured(['ROLE_ADMIN', 'ROLE_PLM_USER'])
-    def releasePart(PlmFreeCadPart part) {
-
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
-        }
-
-        if (part.lifecycleState != PlmPartLifecycleState.WIP) {
-            render(
-                status: 409,
-                text: 'Only WIP parts can be released. Cancel checkout first.'
-            )
-            return
-        }
-
-        crew.User user = springSecurityService.currentUser as crew.User
-
-        if (user == null) {
-            render(status: 403, text: 'You must be logged in to release a part.')
-            return
-        }
-
-        try {
-            plmPartLifecycleService.releasePart(part.id, user)
-        } catch (IllegalStateException e) {
-            render(
-                status: 403,
-                text: e.message ?: 'You do not have permission to release this part.'
-            )
-            return
-        }
-
-        taackUiService.ajaxReload()
-    }
-
-    def addComment(PlmFreeCadPart part) {
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                form(new UiFormSpecifier().ui(part) {
-                    section {
-                        innerFormAction this.&previewAsciidoc as MC
-                        EditorOption.EditorOptionBuilder editor = EditorOption.getBuilder()
-                        editor.addSpanRegexes(TaackBaseAsciidocSpans.spans)
-                        editor.addSpanRegexes(TaackAsciidocTable.spans)
-                        editor.addSpanRegexes(TaackAsciidocPlantUML.spans)
-                        editor.onDropAction(this.&dropEditor as MethodClosure, [id: part.id])
-                        fieldEditor part.commentVersion_, editor.build()
-                    }
-                    formAction this.&saveComment as MC
-                })
+        // Convert domain associations to simple view data before rendering.
+        // This also avoids GSP expression resolution problems inside g:each.
+        List<Map> components = []
+        for (PlmFreeCadLink component : (part.plmLinks ?: [])) {
+            PlmFreeCadPart child = component.part
+            if (child != null && plmFreeCadSecurityService.canDownloadFile(child)) {
+                components.add([
+                    id: child.id,
+                    label: child.label ?: child.originalName ?: 'Unnamed part',
+                    linkVersion: component.partLinkVersion
+                ])
             }
-        })
-    }
-
-    def showPart(PlmFreeCadPart part, Long partVersion, Boolean isHistory) {
-        taackUiService.show(
-                plmFreeCadUiService.buildFreeCadPartBlockShow(
-                        part, partVersion, false, isHistory),
-                isHistory ? null : buildMenu(),
-                "isHistory")
-    }
-
-    def previewAsciidoc(PlmFreeCadPart part) {
-        taackUiService.show TaackUi.createModal {
-            show(new UiShowSpecifier().ui {
-                inlineHtml this.plmFreeCadUiService.genAsciidoc(part), 'asciidocMain'
-            })
         }
-    }
 
-    def previewPart(PlmFreeCadPart part, Long partVersion, String timestamp) {
-        response.setContentType("image/webp")
-        response.setHeader("Content-disposition", "filename=\"${URLEncoder.encode(part?.originalName + '-' + partVersion + '-' + timestamp + '.webp', "UTF-8")}\"")
-        response.setHeader("Cache-Control", "max-age=3200")
-        response.outputStream << (plmFreeCadUiService.preview(part, partVersion)).bytes
-        return false
-    }
-
-    /** Edit the lifecycle state independently of business metadata. */
-    def editPart(PlmFreeCadPart part) {
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
+        List<Map> cadHistory = []
+        int historyIndex = 0
+        for (PlmFreeCadPart revision : (part.history ?: [])) {
+            cadHistory.add([
+                index: historyIndex++,
+                previewTimestamp: revision.mTimeNs ?: part.mTimeNs,
+                version: "${revision.majorVersion == null ? 1 : revision.majorVersion}.${revision.minorVersion == null ? 0 : revision.minorVersion}",
+                lifecycle: revision.lifecycleState?.toString() ?: '—',
+                updated: revision.lastUpdated
+            ])
         }
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                form plmFreeCadUiService.buildPartForm(part)
+
+        List<Map> attachments = []
+        for (def attachment : (part.commentVersionAttachmentList ?: [])) {
+            if (attachment?.originalName) {
+                attachments.add([name: attachment.originalName.toString()])
             }
-        })
+        }
+
+        render(view: 'showPart', model: [
+            part: part, components: components, cadHistory: cadHistory, attachments: attachments,
+            canCheckOut: plmFreeCadSecurityService.canCheckOutPart(part, springSecurityService.currentUser as User),
+            canRelease: plmFreeCadSecurityService.canReleasePart(part, springSecurityService.currentUser as User),
+            canCancel: plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
+        ])
     }
 
-    /** Edit only business metadata; CAD lifecycle controls remain in editPart. */
-    def editPartMetadata(PlmFreeCadPart part) {
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
+    def editPartMetadata(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        boolean installed = grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
+            grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
+        List<Map> categories = []
+        List<Map> materials = []
+        if (installed) {
+            JdbcTemplate jdbc = new JdbcTemplate(dataSource)
+            categories = jdbc.queryForList('SELECT id, name FROM pm_material_category WHERE active = TRUE ORDER BY name')
+            materials = jdbc.queryForList('SELECT id, name, category_id FROM pm_material WHERE active = TRUE ORDER BY name')
         }
-        if ((springSecurityService.currentUser == null)) {
-            render(status: 403, text: 'You cannot edit metadata for this part.')
-            return
-        }
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                form plmFreeCadUiService.buildPartMetadataForm(part)
-            }
-        })
+        render(view:'editPartMetadata', model:[part:part, materialLibraryInstalled:installed,
+            categories:categories, materials:materials])
     }
 
-    /**
-     * Metadata-only persistence. Direct JDBC intentionally bypasses the
-     * IDomainHistory snapshot hook which can collide on creation_order.
-     * CAD version, checkout state, and history rows are left untouched.
-     */
     @Transactional
     def savePartMetadata() {
-        Long partId = params.long('id')
-        PlmFreeCadPart part = partId == null ? null : PlmFreeCadPart.get(partId)
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
-        }
-        if ((springSecurityService.currentUser == null)) {
-            render(status: 403, text: 'You cannot edit metadata for this part.')
-            return
-        }
-
-        String[] names = ['description1', 'description2', 'description3',
-                          'material', 'supplier', 'surfaceTreatment', 'dcn'] as String[]
-        Map<String, String> values = [:]
+        Long id = params.long('id')
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        String[] names = ['description1','description2','description3','material','supplier','surfaceTreatment','dcn']
+        Map values = [:]
         for (String name : names) {
-            String value = params[name] == null ? null : params[name].toString().trim()
-            int limit = name.startsWith('description') ? 1000 : 255
-            if (value != null && value.length() > limit) {
-                render(status: 400, text: "${name} exceeds ${limit} characters.")
-                return
+            String v = params[name]?.toString()?.trim()
+            if (v && v.length() > (name.startsWith('description') ? 1000 : 255)) {
+                response.sendError(400, "${name} is too long"); return
             }
-            values[name] = value ?: null
+            values[name] = v ?: null
         }
-
-        // Keep free-text material editing when the optional Materials Library is absent.
-        boolean materialLibraryInstalled = grailsApplication != null &&
-                grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
-                grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
-
-        // Reject material values that are not in the active Materials Library catalogue.
-        String requestedMaterial = values.material
-        if (materialLibraryInstalled && requestedMaterial) {
-            JdbcTemplate catalogueJdbc = new JdbcTemplate(dataSource)
-            Integer found = catalogueJdbc.queryForObject('''
-                SELECT COUNT(*) FROM pm_material m
-                JOIN pm_material_category c ON c.id = m.category_id
-                WHERE LOWER(m.name) = LOWER(?) AND m.active = TRUE AND c.active = TRUE
-            ''', Integer, requestedMaterial)
-            if (!found || found < 1) {
-                render(status: 400, text: 'Select an active material from the Materials Library.')
-                return
-            }
-        }
-
-        BigDecimal cost = null
-        BigDecimal weight = null
-        try {
-            if (params['cost']?.toString()?.trim()) cost = new BigDecimal(params['cost'].toString().trim())
-            if (params['weight']?.toString()?.trim()) weight = new BigDecimal(params['weight'].toString().trim())
-        } catch (NumberFormatException ignored) {
-            render(status: 400, text: 'Cost and weight must be valid decimal numbers.')
-            return
-        }
-        if ((cost != null && (cost < 0 || cost.scale() > 4 || cost.precision() - cost.scale() > 15)) ||
-            (weight != null && (weight < 0 || weight.scale() > 4 || weight.precision() - weight.scale() > 15))) {
-            render(status: 400, text: 'Cost and weight must be nonnegative and fit DECIMAL(19,4).')
-            return
-        }
-        String lom = params['lom']?.toString()?.trim()
-        if (lom && !(lom in ['A', 'B', 'C', 'P'])) {
-            render(status: 400, text: 'LOM must be A, B, C, or P.')
-            return
-        }
-
+        boolean installed = grailsApplication.mappingContext.getPersistentEntity('materials.Material') != null &&
+            grailsApplication.mappingContext.getPersistentEntity('materials.MaterialCategory') != null
         JdbcTemplate jdbc = new JdbcTemplate(dataSource)
-        int updated = jdbc.update('''
-            UPDATE plm_free_cad_part SET
-                description1 = ?, description2 = ?, description3 = ?,
-                cost = ?, weight = ?, material = ?, supplier = ?,
-                surface_treatment = ?, lom = ?, dcn = ?
-            WHERE id = ? AND active = TRUE AND next_version_id IS NULL
-        ''',
-            values.description1, values.description2, values.description3,
-            cost, weight, values.material, values.supplier,
-            values.surfaceTreatment, lom ?: null, values.dcn, partId)
-        if (updated != 1) {
-            render(status: 409, text: 'The part changed while metadata was being saved.')
-            return
+        if (installed && values.material) {
+            Integer count = jdbc.queryForObject('''SELECT COUNT(*) FROM pm_material m JOIN pm_material_category c
+                ON c.id = m.category_id WHERE LOWER(m.name) = LOWER(?) AND m.active = TRUE AND c.active = TRUE''',
+                Integer, values.material)
+            if (!count) { response.sendError(400, 'Select an active material from the Materials Library'); return }
         }
-        // JDBC bypasses Hibernate's session; reload the page to fetch fresh values.
-        taackUiService.ajaxReload()
+        BigDecimal cost, weight
+        try {
+            cost = params.cost?.trim() ? new BigDecimal(params.cost.trim()) : null
+            weight = params.weight?.trim() ? new BigDecimal(params.weight.trim()) : null
+        } catch (NumberFormatException e) { response.sendError(400, 'Invalid cost or weight'); return }
+        if ([cost,weight].any { it != null && (it < 0 || it.scale() > 4 || it.precision() - it.scale() > 15) }) {
+            response.sendError(400, 'Cost and weight must be nonnegative DECIMAL(19,4)'); return
+        }
+        String lom = params.lom?.trim()
+        if (lom && !(lom in ['A','B','C','P'])) { response.sendError(400, 'Invalid LOM'); return }
+        int updated = jdbc.update('''UPDATE plm_free_cad_part SET description1=?, description2=?, description3=?,
+            cost=?, weight=?, material=?, supplier=?, surface_treatment=?, lom=?, dcn=?
+            WHERE id=? AND active=TRUE AND next_version_id IS NULL''',
+            values.description1,values.description2,values.description3,cost,weight,
+            values.material,values.supplier,values.surfaceTreatment,lom ?: null,values.dcn,id)
+        if (updated != 1) { response.sendError(409, 'Part changed during update'); return }
+        flash.message='Part metadata saved.'
+        response.sendRedirect(request.contextPath + '/plm/showPart/' + id.toString())
     }
 
-    def editPartCategory(PlmFreeCadPart part) {
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
-        }
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                form plmFreeCadUiService.buildPartFormCategory(part)
-            }
-        })
+    def editPart(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        render(view:'editPart',model:[part:part])
     }
 
-    /**
-     * Apply lifecycle transitions using the existing permission-checked service.
-     * Never use TaackSaveService for a status-only edit: its history hook can
-     * insert a duplicate (next_version_id, creation_order) snapshot.
-     */
     @Transactional
     def savePart() {
-        Long partId = params.long('id')
-        PlmFreeCadPart part = partId == null ? null : PlmFreeCadPart.get(partId)
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
-            return
-        }
-        String requested = params['lifecycleState']?.toString()?.trim()
-        if (!(requested in ['WIP', 'CHECKED_OUT', 'RELEASED'])) {
-            render(status: 400, text: 'Select WIP, CHECKED_OUT, or RELEASED.')
-            return
-        }
-        PlmPartLifecycleState current = part.lifecycleState ?: PlmPartLifecycleState.WIP
-        crew.User user = springSecurityService.currentUser as crew.User
+        Long id = params.long('id')
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        String target = params.lifecycleState
+        User user = springSecurityService.currentUser as User
         try {
-            if (requested != current.name()) {
-                if (requested == 'CHECKED_OUT' &&
-                        (current == PlmPartLifecycleState.WIP || current == PlmPartLifecycleState.RELEASED)) {
-                    // A RELEASED part starts a new major revision when checked out.
-                    plmPartLifecycleService.checkOutPart(partId, user)
-                } else if (requested == 'WIP' && current == PlmPartLifecycleState.CHECKED_OUT) {
-                    plmPartLifecycleService.cancelCheckOut(partId, user)
-                } else if (requested == 'RELEASED' && current == PlmPartLifecycleState.WIP) {
-                    plmPartLifecycleService.releasePart(partId, user)
-                } else {
-                    render(status: 409, text: 'This status transition is not allowed. ' +
-                            'Cancel checkout before release; a released part must be revised to change it.')
-                    return
-                }
-            }
-        } catch (IllegalStateException e) {
-            render(status: 403, text: e.message ?: 'Lifecycle transition denied.')
+            if (target == 'CHECKED_OUT' && part.lifecycleState != PlmPartLifecycleState.CHECKED_OUT)
+                plmPartLifecycleService.checkOutPart(id,user)
+            else if (target == 'WIP' && part.lifecycleState == PlmPartLifecycleState.CHECKED_OUT)
+                plmPartLifecycleService.cancelCheckOut(id,user)
+            else if (target == 'RELEASED' && part.lifecycleState == PlmPartLifecycleState.WIP)
+                plmPartLifecycleService.releasePart(id,user)
+            else if (target != part.lifecycleState?.name()) { response.sendError(409, 'Invalid lifecycle transition'); return }
+        } catch (IllegalStateException e) { response.sendError(403,e.message); return }
+        flash.message='Lifecycle updated.'
+        redirect(action:'showPart',id:id)
+    }
+
+    @Transactional
+    def releasePart(Long id) {
+        params.lifecycleState='RELEASED'
+        savePart()
+    }
+
+    def previewPart(Long id, Long partVersion, String timestamp) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        if (partVersion != null && (partVersion < 0 || partVersion >= (part.history?.size() ?: 0))) {
+            response.sendError(404); return
+        }
+        File file=plmFreeCadUiService.preview(part,partVersion)
+        response.contentType=file.name.endsWith('.png') ? 'image/png' : 'image/webp'
+        response.setHeader('Cache-Control','max-age=3200')
+        response.outputStream << file.bytes
+    }
+
+    def downloadBinPart(Long id, Long partVersion) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        if (partVersion != null && (partVersion < 0 || partVersion >= (part.history?.size() ?: 0))) {
+            response.sendError(404); return
+        }
+        File file=plmFreeCadUiService.zipPart(part,partVersion)
+        response.contentType='application/zip'
+        response.setHeader('Content-Disposition', 'attachment; filename="plm-part-' + id + (partVersion == null ? '-latest' : '-history-' + partVersion) + '.zip"')
+        response.outputStream << file.bytes
+    }
+
+    def editPartCategory(Long id) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        render(view:'editPartCategory',model:[part:part,
+            categories:DocumentCategory.list(sort:'id')])
+    }
+
+    @Transactional
+    def savePartCategory(Long id) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        part.documentCategory=params.long('documentCategory') ? DocumentCategory.get(params.long('documentCategory')) : null
+        part.save(flush:true,failOnError:true)
+        flash.message='Category updated.'
+        redirect(action:'showPart',id:id)
+    }
+
+    @Transactional
+    def saveComment(Long id) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        part.comment=params.comment?.toString()
+        part.save(flush:true,failOnError:true)
+        flash.message='Comment saved.'
+        redirect(action:'showPart',id:id)
+    }
+
+    def addComment(Long id) {
+        PlmFreeCadPart part=checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        render(view:'addComment',model:[part:part])
+    }
+
+    // Compatibility endpoints retained while PlmFreeCadUiService still
+    // compiles its legacy Taack UI builders. These methods do not render Taack UI.
+    def addAttachment(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        render(status: 501, text: 'Attachment picker has not yet been migrated to GSP.')
+    }
+
+    @Transactional
+    def onDrop(Long id) {
+        PlmFreeCadPart part = checkedPart(id ?: params.long('id'))
+        if (!part) { response.sendError(404); return }
+        render(status: 501, text: 'Attachment drop upload has not yet been migrated to GSP.')
+    }
+
+    def previewAsciidoc(Long id) {
+        PlmFreeCadPart part = PlmFreeCadPart.get(id)
+        if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) {
+            response.sendError(404)
             return
         }
-        taackUiService.ajaxReload()
+        render(contentType: 'text/html', text: plmFreeCadUiService.genAsciidoc(part))
     }
 
-    @Transactional
-    def savePartCategory(PlmFreeCadPart part) {
-        if (part == null || part.active != true || part.nextVersion != null) {
-            render(status: 404, text: 'Active PLM part not found.')
+    def downloadBinCommentVersionFiles(Long id, String path) {
+        PlmFreeCadPart part = PlmFreeCadPart.get(id)
+        if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) {
+            response.sendError(404)
             return
         }
-        if (part.id) {
-            part.documentCategory = DocumentCategory.get(params.long('documentCategory'))
-        }
-        taackUiService.ajaxReload()
-    }
-
-    def model() {
-        String graph = taackMetaModelService.buildEnumTransitionGraph(PlmFreeCadPartStatus.CREATED)
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                custom taackMetaModelService.svg(graph)
-            }
-        })
-    }
-
-    def addAttachment(PlmFreeCadPart part) {
-        taackUiService.show(new UiBlockSpecifier().ui {
-            modal {
-                inline(this.attachmentUiService.buildAttachmentsBlock(this.&importAttachment as MethodClosure, part.id))
-            }
-        })
-    }
-
-    @Transactional
-    @Secured(['ROLE_ADMIN', 'ROLE_PLM_USER'])
-    def importAttachment(Attachment attachment) {
-        PlmFreeCadPart part = PlmFreeCadPart.get(params.long('objectId'))
-        part.addToCommentVersionAttachmentList(attachment)
-        taackUiService.ajaxReload()
-    }
-
-    @Transactional
-    def saveAttachment() {
-        def p = PlmFreeCadPart.get(params.long('objectId'))
-        def att = taackSaveService.save(Attachment)
-        p.addToCommentVersionAttachmentList(att)
-        taackUiService.ajaxReload()
-    }
-
-    def search(String q) {
-        taackUiService.show(plmSearchService.buildSearchBlock(q), buildMenu(q))
-    }
-
-    def downloadBinCommentVersionFiles(PlmFreeCadPart part, String path) {
         part = part.nextVersion ?: part
-
-        Attachment a = part.commentVersionAttachmentList.find {
-            it.originalName == path.substring(1)
+        String fileName = path?.startsWith('/') ? path.substring(1) : path
+        if (!fileName || fileName.contains('/') || fileName.contains('\\')) {
+            response.sendError(400)
+            return
         }
-        if (a) {
-            if (a.contentType.startsWith("image")) {
-                taackAttachmentService.downloadAttachment(a, true)
-            } else taackAttachmentService.downloadAttachment(a)
-        } else if (path.startsWith('/diag-')) {
-            File f = new File(Asciidoc.pathAsciidocGenerated + '/' + path)
-            if (f.exists()) {
-                response.setContentType('image/svg+xml')
-                response.setHeader('Content-disposition', "attachment;filename=${URLEncoder.encode(path, 'UTF-8')}")
-                response.outputStream << f.bytes
-            } else {
-                log.error "No file: ${f.path}"
-            }
-        }
-
-        return false
+        def attachment = part.commentVersionAttachmentList?.find { it.originalName == fileName }
+        if (!attachment) { response.sendError(404); return }
+        taackAttachmentService.downloadAttachment(attachment)
     }
-
-    @Transactional
-    def dropEditor(PlmFreeCadPart part) {
-        if (params.get('onpaste')) {
-            render "${convertersToAsciidocService.convertFromHtml(params.get('onpaste') as String)}"
-        } else {
-
-            final List<MultipartFile> mfl = (request as MultipartHttpServletRequest).getFiles('filePath')
-            final mf = mfl.first()
-
-            if ([AttachmentContentType.SHEET_ODS.mimeType, AttachmentContentType.LO_TEXT.mimeType].contains(mf.contentType)) {
-                render convertersToAsciidocService.convert(part, mf.inputStream)
-            } else {
-                Attachment attachment = taackSaveService.save(Attachment)
-                if (attachment && part) {
-                    part.addToCommentVersionAttachmentList(attachment)
-                }
-                render "image::${attachment.originalName}[]"
-            }
-        }
-    }
-
-//    def preview3dPart(PlmFreeCadPart part, Long partVersion, String timestamp) {
-//        if (partVersion != null) {
-//            part = part.getHistory()[partVersion]
-//        }
-//
-//        taackUiService.show(new UiBlockSpecifier().ui {
-//            modal {
-//                iframe('/plm/iframe3d?shaOne=' + part.plmContentShaOne, '600')
-////                custom(groovyPageRenderer.render(template: "/plm/previewGlbFile2", model: [shaOne: part.plmContentShaOne]) as String)
-//            }
-//        })
-//    }
-
-
-//    def iframe3d(String shaOne) {
-//        render([template: "/plm/previewGlbFile2", model: [shaOne: shaOne]] as Map)
-//    }
-//
-//    def hdr() {
-//        response.setHeader("Cache-Control", "max-age=31536000")
-//        response.setHeader("Content-disposition", "attachment;filename=\"venice_sunset_1k.hdr\"")
-//        response.outputStream << this.class.getResourceAsStream("/plm/venice_sunset_1k.hdr").readAllBytes()
-//        return true
-//    }
-
-//    def stp3dFileContent(String shaOne) {
-//        render([file: plmFreeCadUiService.create3dPreview(PlmFreeCadPart.findByPlmContentShaOne(shaOne)), contentType: 'application/gltf-buffer'] as Map)
-//    }
-
-    @Transactional
-    def onDrop(PlmFreeCadPart part) {
-        final List<MultipartFile> mfl = (request as MultipartHttpServletRequest).getFiles('filePath')
-        mfl.each {
-            part.addToCommentVersionAttachmentList(taackAttachmentService.createAttachment(it))
-        }
-        taackUiService.ajaxReload()
-    }
-
 }
