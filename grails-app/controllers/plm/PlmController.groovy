@@ -188,7 +188,7 @@ class PlmController {
             else if (target != part.lifecycleState?.name()) { response.sendError(409, 'Invalid lifecycle transition'); return }
         } catch (IllegalStateException e) { response.sendError(403,e.message); return }
         flash.message='Lifecycle updated.'
-        redirect(action:'showPart',id:id)
+        response.sendRedirect(request.contextPath + '/plm/showPart/' + id.toString())
     }
 
     @Transactional

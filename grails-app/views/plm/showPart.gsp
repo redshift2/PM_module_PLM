@@ -47,19 +47,19 @@
 </div>
 <div class="mat-card-body mat-actions">
 <g:if test="${canCheckOut}">
-<g:form action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<g:form uri="/plm/savePart/${plmPart.id}" method="POST" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="CHECKED_OUT"/>
-<button class="mat-btn mat-btn-primary">${plmPart.lifecycleState?.toString() == 'RELEASED' ? 'Create Revision &amp; Check Out' : 'Check Out'}</button>
+<button class="mat-btn mat-btn-primary">${plmPart.lifecycleState?.toString() == 'RELEASED' ? 'Create Revision & Check Out' : 'Check Out'}</button>
 </g:form>
 </g:if>
 <g:if test="${canCancel}">
-<g:form action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<g:form uri="/plm/savePart/${plmPart.id}" method="POST" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="WIP"/>
 <button class="mat-btn">Cancel Check Out</button>
 </g:form>
 </g:if>
 <g:if test="${canRelease}">
-<g:form action="releasePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<g:form uri="/plm/releasePart/${plmPart.id}" method="POST" class="plm-inline">
 <button class="mat-btn mat-btn-primary">Release</button>
 </g:form>
 </g:if>
