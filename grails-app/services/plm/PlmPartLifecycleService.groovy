@@ -7,6 +7,7 @@ import grails.gorm.transactions.Transactional
 class PlmPartLifecycleService {
 
     PlmFreeCadSecurityService plmFreeCadSecurityService
+    PlmEventBridgeService plmEventBridgeService
 
     // Check out a WIP part, or create and check out a new major
     // revision when the current part is RELEASED.
@@ -36,6 +37,8 @@ class PlmPartLifecycleService {
         part.checkedOutAt = new Date()
         part.userUpdated = user
         part.save(flush: true, failOnError: true)
+        plmEventBridgeService.report('PART_CHECK_OUT', part, user?.username,
+            [cadVersion: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"])
         return part
     }
 
@@ -68,6 +71,8 @@ class PlmPartLifecycleService {
         part.releasedBy = user
         part.releasedAt = new Date()
         part.save(flush: true, failOnError: true)
+        plmEventBridgeService.report('PART_RELEASE', part, user?.username,
+            [cadVersion: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"])
         return part
     }
 

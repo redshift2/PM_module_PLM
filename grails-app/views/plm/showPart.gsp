@@ -102,6 +102,12 @@
 </div>
 <div class="mat-card-body plm-pre">${plmPart.comment?.encodeAsHTML() ?: 'No comments.'}</div>
 </section>
+<nav class="plm-detail-tabs" role="tablist" aria-label="Part information">
+<button type="button" class="mat-btn mat-btn-primary" data-plm-tab="bom" aria-selected="true">BOM</button>
+<button type="button" class="mat-btn" data-plm-tab="attachments" aria-selected="false">Attachments</button>
+<button type="button" class="mat-btn" data-plm-tab="history" aria-selected="false">CAD History</button>
+</nav>
+<div id="plm-tab-attachments" class="plm-tab-panel" hidden>
 <section class="mat-card">
 <div class="mat-card-head"><h2>Attachments</h2></div>
 <div class="mat-table-wrap">
@@ -118,9 +124,11 @@
 <g:else><div class="mat-card-body">No attachments.</div></g:else>
 </div>
 </section>
+</div>
+<div id="plm-tab-bom" class="plm-tab-panel">
 <section class="mat-card">
 <div class="mat-card-head">
-<h2>Assembly Components</h2>
+<h2>BOM — Assembly Components</h2>
 </div>
 <div class="mat-table-wrap">
 <table>
@@ -143,6 +151,8 @@
 </table>
 </div>
 </section>
+</div>
+<div id="plm-tab-history" class="plm-tab-panel" hidden>
 <section class="mat-card">
 <div class="mat-card-head">
 <h2>CAD History</h2>
@@ -173,5 +183,25 @@
 </div>
 </section>
 </div>
+</div>
+<script>
+(function () {
+  var buttons = document.querySelectorAll('[data-plm-tab]');
+  function selectTab(name) {
+    buttons.forEach(function (button) {
+      var selected = button.getAttribute('data-plm-tab') === name;
+      button.setAttribute('aria-selected', String(selected));
+      button.classList.toggle('mat-btn-primary', selected);
+    });
+    document.querySelectorAll('.plm-tab-panel').forEach(function (panel) {
+      panel.hidden = panel.id !== 'plm-tab-' + name;
+    });
+  }
+  buttons.forEach(function (button) {
+    button.addEventListener('click', function () { selectTab(button.getAttribute('data-plm-tab')); });
+  });
+  selectTab('bom');
+})();
+</script>
 </body>
 </html>

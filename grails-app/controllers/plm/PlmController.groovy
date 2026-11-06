@@ -16,6 +16,7 @@ class PlmController {
     PlmFreeCadUiService plmFreeCadUiService
     def taackAttachmentService
     PlmSearchService plmSearchService
+    PlmEventBridgeService plmEventBridgeService
 
     def index() { redirect(action: 'parts') }
 
@@ -127,6 +128,10 @@ class PlmController {
         Long id = params.long('id')
         PlmFreeCadPart part = checkedPart(id)
         if (!part || !part.active || part.nextVersion) { response.sendError(404); return }
+        Map previousMetadata = [description1: part.description1, description2: part.description2,
+            description3: part.description3, material: part.material, supplier: part.supplier,
+            surfaceTreatment: part.surfaceTreatment, dcn: part.dcn,
+            cost: part.cost, weight: part.weight, lom: part.lom]
         String[] names = ['description1','description2','description3','material','supplier','surfaceTreatment','dcn']
         Map values = [:]
         for (String name : names) {
@@ -161,7 +166,19 @@ class PlmController {
             values.description1,values.description2,values.description3,cost,weight,
             values.material,values.supplier,values.surfaceTreatment,lom ?: null,values.dcn,id)
         if (updated != 1) { response.sendError(409, 'Part changed during update'); return }
-        flash.message='Part metadata saved.'
+        Map updatedMetadata = [description1: values.description1, description2: values.description2,
+            description3: values.description3, material: values.material, supplier: values.supplier,
+            surfaceTreatment: values.surfaceTreatment, dcn: values.dcn,
+            cost: cost, weight: weight, lom: lom ?: null]
+        Map changes = [:]
+        updatedMetadata.each { key, value ->
+            if (previousMetadata[key]?.toString() != value?.toString()) {
+                changes[key] = [before: previousMetadata[key]?.toString(), after: value?.toString()]
+            }
+        }
+        if (changes) plmEventBridgeService.report('PART_METADATA_EDIT', part,
+            (springSecurityService.currentUser as User)?.username, [changes: changes])
+        flash.message='Part metadata saved.' 
         response.sendRedirect(request.contextPath + '/plm/showPart/' + id.toString())
     }
 
@@ -235,7 +252,7 @@ class PlmController {
         part.documentCategory=params.long('documentCategory') ? DocumentCategory.get(params.long('documentCategory')) : null
         part.save(flush:true,failOnError:true)
         flash.message='Category updated.'
-        redirect(action:'showPart',id:id)
+        response.sendRedirect('/plm/showPart/' + id.toString())
     }
 
     @Transactional
@@ -245,7 +262,7 @@ class PlmController {
         part.comment=params.comment?.toString()
         part.save(flush:true,failOnError:true)
         flash.message='Comment saved.'
-        redirect(action:'showPart',id:id)
+        response.sendRedirect('/plm/showPart/' + id.toString())
     }
 
     def addComment(Long id) {

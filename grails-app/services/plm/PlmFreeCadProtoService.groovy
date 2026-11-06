@@ -25,6 +25,7 @@ class PlmFreeCadProtoService {
 
     SpringSecurityService springSecurityService
     PlmFreeCadSecurityService plmFreeCadSecurityService
+    PlmEventBridgeService plmEventBridgeService
 
     private final String intranetRoot = TaackUiConfiguration.root
 
@@ -312,6 +313,11 @@ class PlmFreeCadProtoService {
                 basename.substring(0, basename.length() - 6) : basename
             part.userUpdated = user
             part.save(flush: true, failOnError: true)
+            if (changedByName.get(plmFile.name) == Boolean.TRUE) {
+                plmEventBridgeService.report('PART_CHECK_IN', part, user.username,
+                    [cadVersion: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}",
+                     filename: part.originalName])
+            }
             if (!plmFile.filePreview.isEmpty()) {
                 Path previewTarget = Paths.get(previewPath, sha + '.png')
                 Files.createDirectories(previewTarget.parent)
