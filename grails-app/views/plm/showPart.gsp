@@ -16,6 +16,19 @@
 <g:link action="editPartMetadata" id="${plmPart.id}" class="mat-btn mat-btn-primary">Edit Metadata</g:link>
 <g:link action="editPartCategory" id="${plmPart.id}" class="mat-btn">Edit Category</g:link>
 <g:link action="addComment" id="${plmPart.id}" class="mat-btn">Edit Comment</g:link>
+<div class="plm-workspace-picker" id="plmWorkspacePicker">
+  <button type="button" class="mat-btn mat-btn-primary" id="plmWorkspaceToggle" aria-expanded="false" aria-controls="plmWorkspaceMenu">Add to Workspace ▾</button>
+  <div id="plmWorkspaceMenu" class="plm-workspace-menu" hidden>
+    <form id="plmWorkspaceForm" method="post" action="/workspace/addPart">
+      <input type="hidden" name="partId" value="${plmPart.id}"/>
+      <input type="hidden" name="inventoryRevision" id="plmWorkspaceRevision"/>
+      <label for="plmWorkspaceSelect">Workspace</label>
+      <select id="plmWorkspaceSelect" name="id" required><option value="">Loading workspaces…</option></select>
+      <button class="mat-btn mat-btn-primary" type="submit" id="plmWorkspaceSubmit">Add</button>
+      <p id="plmWorkspaceMessage" role="status" aria-live="polite"></p>
+    </form>
+  </div>
+</div>
 <g:link action="downloadBinPart" id="${plmPart.id}" class="mat-btn">Download CAD ZIP</g:link>
 </div>
 <section class="mat-card">
@@ -201,6 +214,56 @@
     button.addEventListener('click', function () { selectTab(button.getAttribute('data-plm-tab')); });
   });
   selectTab('bom');
+})();
+</script>
+<style>
+.plm-workspace-picker{position:relative;display:inline-block}
+.plm-workspace-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:1000;min-width:280px;padding:14px;background:#202c3b;color:#fff;border:1px solid #526478;border-radius:6px;box-shadow:0 6px 22px #0006}
+.plm-workspace-menu[hidden]{display:none}
+.plm-workspace-menu label{display:block;margin-bottom:6px}
+.plm-workspace-menu select{display:block;width:100%;margin-bottom:10px;padding:8px;background:#152130;color:#fff;border:1px solid #526478;border-radius:4px}
+#plmWorkspaceMessage{margin:8px 0 0;white-space:normal;font-size:0.9em}
+</style>
+<script>
+(function(){
+  var picker=document.getElementById('plmWorkspacePicker');
+  var toggle=document.getElementById('plmWorkspaceToggle');
+  var menu=document.getElementById('plmWorkspaceMenu');
+  var form=document.getElementById('plmWorkspaceForm');
+  var select=document.getElementById('plmWorkspaceSelect');
+  var revision=document.getElementById('plmWorkspaceRevision');
+  var message=document.getElementById('plmWorkspaceMessage');
+  var submit=document.getElementById('plmWorkspaceSubmit');
+  var loaded=false;
+  function syncRevision(){var opt=select.options[select.selectedIndex];revision.value=opt ? opt.getAttribute('data-revision')||'' : '';}
+  select.addEventListener('change',syncRevision);
+  toggle.addEventListener('click',async function(){
+    var opening=menu.hidden;
+    menu.hidden=!opening;toggle.setAttribute('aria-expanded',String(opening));
+    if(!opening||loaded)return;
+    message.textContent='';
+    try{
+      var response=await fetch('/workspace/editableWorkspaces',{credentials:'same-origin',headers:{'Accept':'application/json'}});
+      if(!response.ok)throw new Error('Unable to load workspaces (HTTP '+response.status+')');
+      var workspaces=await response.json();
+      select.replaceChildren();
+      workspaces.forEach(function(w){var opt=document.createElement('option');opt.value=w.id;opt.textContent=w.name;opt.setAttribute('data-revision',w.inventoryRevision==null?'':w.inventoryRevision);select.appendChild(opt);});
+      if(!workspaces.length){message.textContent='No editable workspaces are available.';submit.disabled=true;}
+      else{submit.disabled=false;syncRevision();}
+      loaded=true;
+    }catch(e){message.textContent=e.message;select.replaceChildren();}
+  });
+  document.addEventListener('click',function(e){if(!picker.contains(e.target)){menu.hidden=true;toggle.setAttribute('aria-expanded','false');}});
+  form.addEventListener('submit',async function(e){
+    e.preventDefault();submit.disabled=true;message.textContent='Adding part…';
+    try{
+      var response=await fetch(form.action,{method:'POST',body:new FormData(form),credentials:'same-origin',headers:{'Accept':'application/json','X-Requested-With':'XMLHttpRequest'}});
+      var result=await response.json();
+      if(!response.ok||!result.success)throw new Error(result.message||'Unable to add part');
+      message.textContent='Part added to '+result.workspaceName+'.';
+    }catch(err){message.textContent=err.message;}
+    finally{submit.disabled=false;}
+  });
 })();
 </script>
 </body>
