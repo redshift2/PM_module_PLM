@@ -119,7 +119,30 @@
 <button type="button" class="mat-btn mat-btn-primary" data-plm-tab="bom" aria-selected="true">BOM</button>
 <button type="button" class="mat-btn" data-plm-tab="attachments" aria-selected="false">Attachments</button>
 <button type="button" class="mat-btn" data-plm-tab="history" aria-selected="false">CAD History</button>
+<button type="button" class="mat-btn" data-plm-tab="preview" aria-selected="false">3D Preview</button>
 </nav>
+<div id="plm-tab-preview" class="plm-tab-panel" hidden>
+<section class="mat-card">
+<div class="mat-card-head"><h2>3D Preview — CAD Version ${plmPart.majorVersion == null ? 1 : plmPart.majorVersion}.${plmPart.minorVersion == null ? 0 : plmPart.minorVersion}</h2></div>
+<div class="mat-card-body">
+<g:if test="${previewAvailable}">
+  <div id="plmModelHost" data-src="${createLink(controller:'plm', action:'previewGlb', id:plmPart.id)}">
+    <model-viewer id="plmModelViewer" camera-controls auto-rotate shadow-intensity="1" exposure="1" style="display:block;width:100%;height:480px;background:#1b232c;border-radius:8px" alt="3D preview of this part"></model-viewer>
+  </div>
+  <p><g:link controller="plm" action="downloadPreviewGlb" id="${plmPart.id}" class="mat-btn">Download GLB</g:link></p>
+  <p id="plmPreviewStatus" role="status">Select the 3D Preview tab to load the model.</p>
+</g:if>
+<g:else><p>No 3D preview is available for this CAD version yet.</p></g:else>
+<sec:ifAnyGranted roles="ROLE_ADMIN">
+  <form action="${createLink(controller:'plm',action:'uploadPreviewGlb',id:plmPart.id)}" method="post" enctype="multipart/form-data">
+    <label for="plmPreviewUpload">Upload GLB (administrator)</label>
+    <input id="plmPreviewUpload" name="model" type="file" accept=".glb,model/gltf-binary" required/>
+    <button type="submit" class="mat-btn">Upload Preview</button>
+  </form>
+</sec:ifAnyGranted>
+</div>
+</section>
+</div>
 <div id="plm-tab-attachments" class="plm-tab-panel" hidden>
 <section class="mat-card">
 <div class="mat-card-head"><h2>Attachments</h2></div>
@@ -213,7 +236,28 @@
   buttons.forEach(function (button) {
     button.addEventListener('click', function () { selectTab(button.getAttribute('data-plm-tab')); });
   });
-  selectTab('bom');
+  var previewLoaded = false;
+  function loadPreview() {
+    if (previewLoaded) return;
+    var host = document.getElementById('plmModelHost');
+    if (!host) return;
+    previewLoaded = true;
+    var viewer = document.getElementById('plmModelViewer');
+    var status = document.getElementById('plmPreviewStatus');
+    var script = document.createElement('script');
+    script.type = 'module';
+    script.src = 'https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js';
+    script.onload = function () { viewer.src = host.getAttribute('data-src'); status.textContent = 'Loading model…'; };
+    script.onerror = function () { status.textContent = '3D viewer library could not be loaded.'; };
+    document.head.appendChild(script);
+    viewer.addEventListener('load', function () { status.textContent = 'Model loaded.'; });
+    viewer.addEventListener('error', function () { status.textContent = 'Unable to display this GLB model.'; });
+  }
+  buttons.forEach(function(button) {
+    button.addEventListener('click', function () { if (button.getAttribute('data-plm-tab') === 'preview') loadPreview(); });
+  });
+  if (window.location.hash === '#plm-tab-preview') { selectTab('preview'); loadPreview(); }
+  else selectTab('bom');
 })();
 </script>
 <style>

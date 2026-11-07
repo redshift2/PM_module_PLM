@@ -8,6 +8,7 @@ class PlmPartLifecycleService {
 
     PlmFreeCadSecurityService plmFreeCadSecurityService
     PlmEventBridgeService plmEventBridgeService
+    def grailsApplication
 
     // Check out a WIP part, or create and check out a new major
     // revision when the current part is RELEASED.
@@ -73,6 +74,24 @@ class PlmPartLifecycleService {
         part.save(flush: true, failOnError: true)
         plmEventBridgeService.report('PART_RELEASE', part, user?.username,
             [cadVersion: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"])
+        // Queue only after the release commits. A conversion failure must never
+        // roll back a successful PLM release.
+        final Long releasedId = part.id
+        final String releasedVersion = "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"
+        final String releasedSha = part.plmContentShaOne
+        final String actor = user?.username ?: 'plm'
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+            new org.springframework.transaction.support.TransactionSynchronization() {
+                @Override void afterCommit() {
+                    try {
+                        grailsApplication.mainContext.getBean('plmCadConversionService')
+                            .enqueueReleasedPart(releasedId, releasedVersion, releasedSha, actor)
+                    } catch (Exception ex) {
+                        log.error("PLM conversion enqueue failed for part ${releasedId} version ${releasedVersion}", ex)
+                    }
+                }
+            }
+        )
         return part
     }
 

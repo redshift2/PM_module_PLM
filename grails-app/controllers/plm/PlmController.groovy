@@ -17,6 +17,7 @@ class PlmController {
     def taackAttachmentService
     PlmSearchService plmSearchService
     PlmEventBridgeService plmEventBridgeService
+    PlmPreviewStorageService plmPreviewStorageService
 
     def index() { redirect(action: 'parts') }
 
@@ -101,10 +102,54 @@ class PlmController {
 
         render(view: 'showPart', model: [
             part: part, components: components, cadHistory: cadHistory, attachments: attachments,
+            previewAvailable: plmPreviewStorageService.modelFile(part).isFile(),
             canCheckOut: plmFreeCadSecurityService.canCheckOutPart(part, springSecurityService.currentUser as User),
             canRelease: plmFreeCadSecurityService.canReleasePart(part, springSecurityService.currentUser as User),
             canCancel: plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
         ])
+    }
+
+    /** Serve only the GLB stored for this exact part and CAD revision. */
+    def previewGlb(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        File model = plmPreviewStorageService.modelFile(part)
+        if (!model.isFile()) { response.sendError(404); return }
+        response.contentType = 'model/gltf-binary'
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        response.setHeader('Cache-Control', 'private, max-age=120')
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
+    }
+
+    def downloadPreviewGlb(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        File model = plmPreviewStorageService.modelFile(part)
+        if (!model.isFile()) { response.sendError(404); return }
+        response.contentType = 'model/gltf-binary'
+        response.setHeader('Content-Disposition', 'attachment; filename="part-' + id + '-v' +
+            (part.majorVersion ?: 1) + '.' + (part.minorVersion ?: 0) + '.glb"')
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
+    }
+
+    /** Temporary administrator-only ingestion until the worker result hook is wired. */
+    @Secured(['ROLE_ADMIN'])
+    def uploadPreviewGlb(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        def upload = request.getFile('model')
+        if (!upload || upload.empty) { response.sendError(400, 'Select a GLB file'); return }
+        try {
+            plmPreviewStorageService.store(part, upload.inputStream, upload.size, upload.originalFilename)
+            flash.message = '3D preview uploaded.'
+        } catch (IllegalArgumentException ex) {
+            response.sendError(400, ex.message); return
+        }
+        response.sendRedirect('/plm/showPart/' + part.id + '#plm-tab-preview')
     }
 
     def editPartMetadata(Long id) {
