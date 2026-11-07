@@ -8,7 +8,7 @@ import java.nio.file.*
 import java.security.MessageDigest
 import java.util.zip.*
 
-/** Bridges released CAD revisions to the existing remote-worker queue. */
+/** Packages CAD revisions to the existing remote-worker queue. */
 class PlmCadConversionService {
     // Resolve Server Administration dynamically: PLM is compiled as a separate Gradle module.
     def grailsApplication
@@ -20,12 +20,11 @@ class PlmCadConversionService {
 
     // Do not wrap job submission and package assignment in an outer transaction.
     // Each ServerJobService call must commit independently for worker polling.
-    void enqueueReleasedPart(Long partId, String version, String sha, String actor) {
+    void enqueuePartConversion(Long partId, String version, String sha, String actor) {
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
-        if (!part || part.lifecycleState != PlmPartLifecycleState.RELEASED ||
-                "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != version ||
+        if (!part || "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != version ||
                 part.plmContentShaOne != sha || !part.plmFilePath) {
-            throw new IllegalStateException('Released CAD revision no longer matches the enqueue request')
+            throw new IllegalStateException('CAD revision no longer matches the enqueue request')
         }
         if (!(part.plmFilePath ==~ /[a-fA-F0-9]{40}\.[a-zA-Z0-9]+/))
             throw new IllegalStateException('Invalid stored CAD filename')
@@ -66,8 +65,7 @@ class PlmCadConversionService {
         Map metadata = (Map)new JsonSlurper().parseText(job.parametersJson ?: '{}')
         Long partId = Long.valueOf(metadata.partId.toString())
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
-        if (!part || part.lifecycleState != PlmPartLifecycleState.RELEASED ||
-            "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != metadata.cadVersion ||
+        if (!part || "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != metadata.cadVersion ||
             part.plmContentShaOne != metadata.cadSha1)
             throw new IllegalStateException('CAD result revision does not match released part')
         ZipFile zip = new ZipFile(resultZip.toFile())
