@@ -134,16 +134,16 @@
        data-glb="${previewGlbAvailable ? createLink(controller:'plm', action:'previewGlb', id:plmPart.id) : ''}"
        data-x3d="${previewX3dAvailable ? createLink(controller:'plm', action:'previewX3d', id:plmPart.id) : ''}">
     <div id="plmGlbToolbar" class="plm-glb-toolbar" style="display:none;margin-bottom:8px;gap:6px;flex-wrap:wrap">
-      <button type="button" class="mat-btn" data-glb-view="fit">Fit</button>
-      <button type="button" class="mat-btn" data-glb-view="iso">Isometric</button>
-      <button type="button" class="mat-btn" data-glb-view="front">Front</button>
-      <button type="button" class="mat-btn" data-glb-view="rear">Rear</button>
-      <button type="button" class="mat-btn" data-glb-view="top">Top</button>
-      <button type="button" class="mat-btn" data-glb-view="bottom">Bottom</button>
-      <button type="button" class="mat-btn" data-glb-view="left">Left</button>
-      <button type="button" class="mat-btn" data-glb-view="right">Right</button>
-      <button type="button" class="mat-btn" id="plmGlbProjection">Orthographic</button>
-      <button type="button" class="mat-btn" id="plmGlbWireframe">Wireframe</button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="fit" title="Fit model" aria-label="Fit model"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#22c55e" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="#22c55e" fill-opacity="0.14" stroke="none"/><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/><path d="M9 9h6v6H9z"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="iso" title="Isometric" aria-label="Isometric"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#2563eb" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 21,7 12,12 3,7" fill="#60a5fa" fill-opacity="0.50" stroke="none"/><polygon points="3,7 12,12 12,22 3,17" fill="#34d399" fill-opacity="0.35" stroke="none"/><polygon points="21,7 12,12 12,22 21,17" fill="#fbbf24" fill-opacity="0.40" stroke="none"/><path d="m12 2 9 5-9 5-9-5 9-5ZM3 7v10l9 5 9-5V7M12 12v10"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="front" title="Front" aria-label="Front"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#06b6d4" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#06b6d4" fill-opacity="0.16" stroke="none"/><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M12 7v10M7 12h10"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="rear" title="Rear" aria-label="Rear"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#f97316" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#f97316" fill-opacity="0.16" stroke="none"/><rect x="4" y="4" width="16" height="16" rx="1"/><path d="m9 9 6 6m0-6-6 6"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="top" title="Top" aria-label="Top"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#8b5cf6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 21,7 12,12 3,7" fill="#60a5fa" fill-opacity="0.50" stroke="none"/><polygon points="3,7 12,12 12,22 3,17" fill="#34d399" fill-opacity="0.35" stroke="none"/><polygon points="21,7 12,12 12,22 21,17" fill="#fbbf24" fill-opacity="0.40" stroke="none"/><path d="m12 3 9 5-9 5-9-5 9-5ZM3 8v8l9 5 9-5V8"/><path d="m8 8 4-2 4 2-4 2-4-2Z"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="bottom" title="Bottom" aria-label="Bottom"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#eab308" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 21,7 12,12 3,7" fill="#60a5fa" fill-opacity="0.50" stroke="none"/><polygon points="3,7 12,12 12,22 3,17" fill="#34d399" fill-opacity="0.35" stroke="none"/><polygon points="21,7 12,12 12,22 21,17" fill="#fbbf24" fill-opacity="0.40" stroke="none"/><path d="m12 3 9 5-9 5-9-5 9-5ZM3 8v8l9 5 9-5V8"/><path d="M8 16h8m-4-3v6"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="left" title="Left" aria-label="Left"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ec4899" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#ec4899" fill-opacity="0.16" stroke="none"/><path d="M7 4h12v16H7zM3 8h4M3 16h4"/><path d="m11 12 4-4m-4 4 4 4"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" data-glb-view="right" title="Right" aria-label="Right"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#14b8a6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" fill="#14b8a6" fill-opacity="0.16" stroke="none"/><path d="M5 4h12v16H5zM17 8h4M17 16h4"/><path d="m13 12-4-4m4 4-4 4"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" id="plmGlbProjection" title="Switch to orthographic" aria-label="Switch to orthographic" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#6366f1" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 21,7 12,12 3,7" fill="#60a5fa" fill-opacity="0.50" stroke="none"/><polygon points="3,7 12,12 12,22 3,17" fill="#34d399" fill-opacity="0.35" stroke="none"/><polygon points="21,7 12,12 12,22 21,17" fill="#fbbf24" fill-opacity="0.40" stroke="none"/><path d="m4 8 8-5 8 5-8 5-8-5ZM4 8v9l8 4 8-4V8M12 13v8"/></svg></button>
+      <button type="button" class="mat-btn plm-glb-icon-btn" id="plmGlbWireframe" title="Show wireframe" aria-label="Show wireframe" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#ef4444" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12,2 21,7 12,12 3,7" fill="#60a5fa" fill-opacity="0.50" stroke="none"/><polygon points="3,7 12,12 12,22 3,17" fill="#34d399" fill-opacity="0.35" stroke="none"/><polygon points="21,7 12,12 12,22 21,17" fill="#fbbf24" fill-opacity="0.40" stroke="none"/><path d="m12 2 9 5-9 5-9-5 9-5ZM3 7v10l9 5 9-5V7M12 12v10M3 7l18 10M21 7 3 17"/></svg></button>
       <label style="display:inline-flex;align-items:center;gap:5px">Background <input type="color" id="plmGlbBackground" value="#1b232c"/></label>
     </div>
     <div id="plmModelViewer" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px;position:relative;overflow:hidden" role="img" aria-label="Interactive 3D GLB preview"></div>
@@ -343,6 +343,13 @@
 })();
 </script>
 <style>
+.plm-glb-icon-btn{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;padding:7px;vertical-align:middle;cursor:pointer}
+.plm-glb-icon-btn svg{display:block;flex:none;pointer-events:none}
+.plm-glb-icon-btn{background:linear-gradient(180deg,#ffffff,#eef3fa);border:1px solid #b8c7d9;border-radius:7px;box-shadow:0 1px 2px #0002}
+.plm-glb-icon-btn:hover{background:#e0edff;border-color:#7ca9e8}
+.plm-glb-icon-btn[aria-pressed="true"]{background:#dbeafe;border-color:#3b82f6;box-shadow:inset 0 0 0 1px #3b82f6}
+.plm-glb-icon-btn[aria-pressed="true"]{outline:2px solid currentColor;outline-offset:-3px}
+.plm-glb-icon-btn:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 .plm-workspace-picker{position:relative;display:inline-block}
 .plm-workspace-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:1000;min-width:280px;padding:14px;background:#202c3b;color:#fff;border:1px solid #526478;border-radius:6px;box-shadow:0 6px 22px #0006}
 .plm-workspace-menu[hidden]{display:none}
@@ -464,7 +471,10 @@ if (host) {
                    : new THREE.PerspectiveCamera(45, w/h, 0.00001, radius*1000);
     camera.position.copy(position); camera.up.set(0,0,1);
     controls.object = camera; controls.target.copy(target); controls.update();
-    document.getElementById('plmGlbProjection').textContent = ortho ? 'Perspective' : 'Orthographic';
+    const projectionButton = document.getElementById('plmGlbProjection');
+    const projectionLabel = ortho ? 'Switch to perspective' : 'Switch to orthographic';
+    projectionButton.title = projectionLabel; projectionButton.setAttribute('aria-label', projectionLabel);
+    projectionButton.setAttribute('aria-pressed', String(ortho));
     resize();
   }
   document.querySelectorAll('[data-glb-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.glbView === 'fit' ? 'iso' : b.dataset.glbView)));
@@ -475,7 +485,9 @@ if (host) {
       if (!o.isMesh) return;
       (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if(m) {m.wireframe = wireframe; m.needsUpdate = true;} });
     });
-    this.textContent = wireframe ? 'Solid' : 'Wireframe';
+    const wireLabel = wireframe ? 'Show solid surfaces' : 'Show wireframe';
+    this.title = wireLabel; this.setAttribute('aria-label', wireLabel);
+    this.setAttribute('aria-pressed', String(wireframe));
   });
   document.getElementById('plmGlbBackground').addEventListener('input', e => {
     scene.background = new THREE.Color(e.target.value);
