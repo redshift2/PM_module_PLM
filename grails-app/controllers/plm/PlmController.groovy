@@ -102,7 +102,9 @@ class PlmController {
 
         render(view: 'showPart', model: [
             part: part, components: components, cadHistory: cadHistory, attachments: attachments,
-            previewAvailable: plmPreviewStorageService.modelFile(part).isFile(),
+            previewAvailable: plmPreviewStorageService.modelFile(part).isFile() || plmPreviewStorageService.x3dFile(part).isFile(),
+            previewGlbAvailable: plmPreviewStorageService.modelFile(part).isFile(),
+            previewX3dAvailable: plmPreviewStorageService.x3dFile(part).isFile(),
             canCheckOut: plmFreeCadSecurityService.canCheckOutPart(part, springSecurityService.currentUser as User),
             canRelease: plmFreeCadSecurityService.canReleasePart(part, springSecurityService.currentUser as User),
             canCancel: plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
@@ -134,6 +136,54 @@ class PlmController {
         response.setContentLengthLong(model.length())
         model.withInputStream { input -> response.outputStream << input }
         response.outputStream.flush()
+    }
+
+    /** Serve XML X3D for this part and CAD revision. */
+    def previewX3d(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        File model = plmPreviewStorageService.x3dFile(part)
+        if (!model.isFile()) { response.sendError(404); return }
+        response.contentType = 'model/x3d+xml'
+        response.characterEncoding = 'UTF-8'
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        response.setHeader('Cache-Control', 'private, max-age=120')
+        response.setHeader('Content-Security-Policy', "default-src 'none'; sandbox")
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
+    }
+
+    def downloadPreviewX3d(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        File model = plmPreviewStorageService.x3dFile(part)
+        if (!model.isFile()) { response.sendError(404); return }
+        response.contentType = 'application/octet-stream'
+        response.setHeader('Content-Disposition', 'attachment; filename="part-' + id + '-v' +
+            (part.majorVersion == null ? 1 : part.majorVersion) + '.' +
+            (part.minorVersion == null ? 0 : part.minorVersion) + '.x3d"')
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
+    }
+
+    @Secured(['ROLE_ADMIN'])
+    def uploadPreviewX3d(Long id) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part) { response.sendError(404); return }
+        def upload = request.getFile('model')
+        if (!upload || upload.empty) { response.sendError(400, 'Select an X3D file'); return }
+        try {
+            plmPreviewStorageService.storeX3d(part, upload.inputStream, upload.size, upload.originalFilename)
+            flash.message = 'X3D preview uploaded.'
+        } catch (IllegalArgumentException ex) {
+            flash.message = 'X3D upload rejected: ' + ex.message
+            response.sendRedirect('/plm/showPart/' + part.id + '#plm-tab-preview')
+            return
+        }
+        response.sendRedirect('/plm/showPart/' + part.id + '#plm-tab-preview')
     }
 
     /** Temporary administrator-only ingestion until the worker result hook is wired. */

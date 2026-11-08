@@ -58,23 +58,29 @@ class PlmCadConversionService {
         } finally { Files.deleteIfExists(tmp) }
     }
 
-    /** Called after a worker result ZIP is stored; validates revision before accepting GLB. */
+    /** Import either preview format using the same revision verification and storage. */
     @Transactional
     void importWorkerResult(Object job, Path resultZip) {
-        if (job.jobType != 'CAD_TO_GLB') return
+        if (!(job.jobType in ['CAD_TO_GLB', 'CAD_TO_X3D'])) return
         Map metadata = (Map)new JsonSlurper().parseText(job.parametersJson ?: '{}')
+        if (!metadata.partId || !metadata.cadVersion || !metadata.cadSha1)
+            throw new IllegalArgumentException('Missing CAD revision metadata in worker job')
         Long partId = Long.valueOf(metadata.partId.toString())
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
         if (!part || "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != metadata.cadVersion ||
             part.plmContentShaOne != metadata.cadSha1)
-            throw new IllegalStateException('CAD result revision does not match released part')
+            throw new IllegalStateException('CAD result revision does not match current part')
+        boolean x3d = job.jobType == 'CAD_TO_X3D'
+        String filename = x3d ? 'model.x3d' : 'model.glb'
+        long minSize = x3d ? 10L : 12L
         ZipFile zip = new ZipFile(resultZip.toFile())
         try {
-            ZipEntry entry = zip.getEntry('model.glb')
-            if (!entry || entry.directory || entry.size < 12 || entry.size > 250L*1024L*1024L)
-                throw new IllegalArgumentException('Worker result does not contain valid model.glb')
+            ZipEntry entry = zip.getEntry(filename)
+            if (!entry || entry.directory || entry.size < minSize || entry.size > 250L*1024L*1024L)
+                throw new IllegalArgumentException('Worker result does not contain valid ' + filename)
             zip.getInputStream(entry).withCloseable { stream ->
-                plmPreviewStorageService.store(part, stream, entry.size, 'model.glb')
+                if (x3d) plmPreviewStorageService.storeX3d(part, stream, entry.size, filename)
+                else plmPreviewStorageService.store(part, stream, entry.size, filename)
             }
         } finally { zip.close() }
     }

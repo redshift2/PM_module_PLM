@@ -126,10 +126,20 @@
 <div class="mat-card-head"><h2>3D Preview — CAD Version ${plmPart.majorVersion == null ? 1 : plmPart.majorVersion}.${plmPart.minorVersion == null ? 0 : plmPart.minorVersion}</h2></div>
 <div class="mat-card-body">
 <g:if test="${previewAvailable}">
-  <div id="plmModelHost" data-src="${createLink(controller:'plm', action:'previewGlb', id:plmPart.id)}">
-    <model-viewer id="plmModelViewer" camera-controls auto-rotate shadow-intensity="1" exposure="1" style="display:block;width:100%;height:480px;background:#1b232c;border-radius:8px" alt="3D preview of this part"></model-viewer>
+  <div class="plm-preview-formats" style="margin-bottom:10px">
+    <g:if test="${previewGlbAvailable}"><button type="button" class="mat-btn" data-preview-format="glb">GLB</button></g:if>
+    <g:if test="${previewX3dAvailable}"><button type="button" class="mat-btn" data-preview-format="x3d">X3D</button></g:if>
   </div>
-  <p><g:link controller="plm" action="downloadPreviewGlb" id="${plmPart.id}" class="mat-btn">Download GLB</g:link></p>
+  <div id="plmModelHost"
+       data-glb="${previewGlbAvailable ? createLink(controller:'plm', action:'previewGlb', id:plmPart.id) : ''}"
+       data-x3d="${previewX3dAvailable ? createLink(controller:'plm', action:'previewX3d', id:plmPart.id) : ''}">
+    <model-viewer id="plmModelViewer" camera-controls auto-rotate shadow-intensity="1" exposure="1" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px" alt="3D preview of this part"></model-viewer>
+    <div id="plmX3dViewer" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px"></div>
+  </div>
+  <p>
+    <g:if test="${previewGlbAvailable}"><g:link controller="plm" action="downloadPreviewGlb" id="${plmPart.id}" class="mat-btn">Download GLB</g:link></g:if>
+    <g:if test="${previewX3dAvailable}"><g:link controller="plm" action="downloadPreviewX3d" id="${plmPart.id}" class="mat-btn">Download X3D</g:link></g:if>
+  </p>
   <p id="plmPreviewStatus" role="status">Select the 3D Preview tab to load the model.</p>
 </g:if>
 <g:else><p>No 3D preview is available for this CAD version yet.</p></g:else>
@@ -140,6 +150,11 @@
     <button type="submit" class="mat-btn">Upload Preview</button>
   </form>
 </sec:ifAnyGranted>
+  <form action="${createLink(controller:'plm',action:'uploadPreviewX3d',id:plmPart.id)}" method="post" enctype="multipart/form-data">
+    <label for="plmPreviewX3dUpload">Upload X3D (administrator)</label>
+    <input id="plmPreviewX3dUpload" name="model" type="file" accept=".x3d,model/x3d+xml" required/>
+    <button type="submit" class="mat-btn">Upload X3D</button>
+  </form>
 </div>
 </section>
 </div>
@@ -236,23 +251,49 @@
   buttons.forEach(function (button) {
     button.addEventListener('click', function () { selectTab(button.getAttribute('data-plm-tab')); });
   });
-  var previewLoaded = false;
-  function loadPreview() {
-    if (previewLoaded) return;
+  var previewLoaded = {};
+  function loadPreview(format) {
     var host = document.getElementById('plmModelHost');
     if (!host) return;
-    previewLoaded = true;
+    format = format || (host.getAttribute('data-glb') ? 'glb' : 'x3d');
+    var url = host.getAttribute('data-' + format);
+    if (!url) return;
     var viewer = document.getElementById('plmModelViewer');
+    var x3dHost = document.getElementById('plmX3dViewer');
     var status = document.getElementById('plmPreviewStatus');
-    var script = document.createElement('script');
-    script.type = 'module';
-    script.src = 'https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js';
-    script.onload = function () { viewer.src = host.getAttribute('data-src'); status.textContent = 'Loading model…'; };
-    script.onerror = function () { status.textContent = '3D viewer library could not be loaded.'; };
-    document.head.appendChild(script);
-    viewer.addEventListener('load', function () { status.textContent = 'Model loaded.'; });
-    viewer.addEventListener('error', function () { status.textContent = 'Unable to display this GLB model.'; });
+    viewer.style.display = format === 'glb' ? 'block' : 'none';
+    x3dHost.style.display = format === 'x3d' ? 'block' : 'none';
+    if (previewLoaded[format]) return;
+    previewLoaded[format] = true;
+    status.textContent = 'Loading ' + format.toUpperCase() + ' model…';
+    if (format === 'glb') {
+      var script = document.createElement('script');
+      script.type = 'module';
+      script.src = 'https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js';
+      script.onload = function () { viewer.src = url; };
+      script.onerror = function () { status.textContent = 'GLB viewer library could not be loaded.'; previewLoaded.glb = false; };
+      document.head.appendChild(script);
+      viewer.addEventListener('load', function () { status.textContent = 'GLB model loaded.'; });
+      viewer.addEventListener('error', function () { status.textContent = 'Unable to display this GLB model.'; });
+    } else {
+      // X_ITE supports XML X3D directly, without GLB conversion.
+      var canvas = document.createElement('x3d-canvas');
+      canvas.setAttribute('src', url);
+      canvas.setAttribute('contentScale', 'auto');
+      canvas.style.cssText = 'display:block;width:100%;height:100%';
+      x3dHost.appendChild(canvas);
+      function ready() { status.textContent = 'X3D viewer ready.'; }
+      if (window.X3D) { ready(); return; }
+      var script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/x_ite/dist/x_ite.min.js';
+      script.onload = ready;
+      script.onerror = function () { status.textContent = 'X3D viewer library could not be loaded.'; previewLoaded.x3d = false; };
+      document.head.appendChild(script);
+    }
   }
+  document.querySelectorAll('[data-preview-format]').forEach(function(button) {
+    button.addEventListener('click', function () { loadPreview(button.getAttribute('data-preview-format')); });
+  });
   buttons.forEach(function(button) {
     button.addEventListener('click', function () { if (button.getAttribute('data-plm-tab') === 'preview') loadPreview(); });
   });
