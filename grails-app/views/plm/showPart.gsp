@@ -133,8 +133,22 @@
   <div id="plmModelHost"
        data-glb="${previewGlbAvailable ? createLink(controller:'plm', action:'previewGlb', id:plmPart.id) : ''}"
        data-x3d="${previewX3dAvailable ? createLink(controller:'plm', action:'previewX3d', id:plmPart.id) : ''}">
-    <model-viewer id="plmModelViewer" camera-controls auto-rotate shadow-intensity="1" exposure="1" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px" alt="3D preview of this part"></model-viewer>
+    <div id="plmGlbToolbar" class="plm-glb-toolbar" style="display:none;margin-bottom:8px;gap:6px;flex-wrap:wrap">
+      <button type="button" class="mat-btn" data-glb-view="fit">Fit</button>
+      <button type="button" class="mat-btn" data-glb-view="iso">Isometric</button>
+      <button type="button" class="mat-btn" data-glb-view="front">Front</button>
+      <button type="button" class="mat-btn" data-glb-view="rear">Rear</button>
+      <button type="button" class="mat-btn" data-glb-view="top">Top</button>
+      <button type="button" class="mat-btn" data-glb-view="bottom">Bottom</button>
+      <button type="button" class="mat-btn" data-glb-view="left">Left</button>
+      <button type="button" class="mat-btn" data-glb-view="right">Right</button>
+      <button type="button" class="mat-btn" id="plmGlbProjection">Orthographic</button>
+      <button type="button" class="mat-btn" id="plmGlbWireframe">Wireframe</button>
+      <label style="display:inline-flex;align-items:center;gap:5px">Background <input type="color" id="plmGlbBackground" value="#1b232c"/></label>
+    </div>
+    <div id="plmModelViewer" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px;position:relative;overflow:hidden" role="img" aria-label="Interactive 3D GLB preview"></div>
     <div id="plmX3dViewer" style="display:none;width:100%;height:480px;background:#1b232c;border-radius:8px"></div>
+    <button type="button" id="plmX3dFit" class="mat-btn" style="display:none;margin-top:8px">Fit X3D Model</button>
   </div>
   <p>
     <g:if test="${previewGlbAvailable}"><g:link controller="plm" action="downloadPreviewGlb" id="${plmPart.id}" class="mat-btn">Download GLB</g:link></g:if>
@@ -261,28 +275,55 @@
     var viewer = document.getElementById('plmModelViewer');
     var x3dHost = document.getElementById('plmX3dViewer');
     var status = document.getElementById('plmPreviewStatus');
+    var fitButton = document.getElementById('plmX3dFit');
+    fitButton.style.display = format === 'x3d' ? 'inline-block' : 'none';
     viewer.style.display = format === 'glb' ? 'block' : 'none';
+    document.getElementById('plmGlbToolbar').style.display = format === 'glb' ? 'flex' : 'none';
     x3dHost.style.display = format === 'x3d' ? 'block' : 'none';
     if (previewLoaded[format]) return;
     previewLoaded[format] = true;
     status.textContent = 'Loading ' + format.toUpperCase() + ' model…';
     if (format === 'glb') {
-      var script = document.createElement('script');
-      script.type = 'module';
-      script.src = 'https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js';
-      script.onload = function () { viewer.src = url; };
-      script.onerror = function () { status.textContent = 'GLB viewer library could not be loaded.'; previewLoaded.glb = false; };
-      document.head.appendChild(script);
-      viewer.addEventListener('load', function () { status.textContent = 'GLB model loaded.'; });
-      viewer.addEventListener('error', function () { status.textContent = 'Unable to display this GLB model.'; });
+      if (window.plmLoadGlb) window.plmLoadGlb(url);
+      else window.addEventListener('plm-glb-ready', function once() {
+        window.removeEventListener('plm-glb-ready', once);
+        window.plmLoadGlb(url);
+      });
     } else {
       // X_ITE supports XML X3D directly, without GLB conversion.
       var canvas = document.createElement('x3d-canvas');
       canvas.setAttribute('src', url);
       canvas.setAttribute('contentScale', 'auto');
+      canvas.setAttribute('splashScreen', 'false');
       canvas.style.cssText = 'display:block;width:100%;height:100%';
       x3dHost.appendChild(canvas);
-      function ready() { status.textContent = 'X3D viewer ready.'; }
+      // X3D geometry is often in millimetres and far outside the default camera.
+      // Fit the scene after it loads and after the canvas has a visible size.
+      function fitScene() {
+        try {
+          var browser = canvas.browser || (typeof canvas.getBrowser === 'function' && canvas.getBrowser());
+          if (browser && typeof browser.viewAll === 'function') {
+            browser.viewAll();
+            status.textContent = 'X3D model loaded. Camera fitted to model.';
+          } else {
+            status.textContent = 'X3D viewer loaded. Use Fit X3D Model to frame the geometry.';
+          }
+        } catch (error) {
+          status.textContent = 'X3D camera fit unavailable: ' + error.message;
+        }
+      }
+      function scheduleFit() {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(fitScene);
+        });
+      }
+      fitButton.onclick = scheduleFit;
+      canvas.addEventListener('load', scheduleFit);
+      function ready() {
+        status.textContent = 'X3D viewer initialized. Loading scene…';
+        // Some X_ITE versions fire load before the script onload callback.
+        setTimeout(scheduleFit, 350);
+      }
       if (window.X3D) { ready(); return; }
       var script = document.createElement('script');
       script.src = 'https://cdn.jsdelivr.net/npm/x_ite/dist/x_ite.min.js';
@@ -350,6 +391,112 @@
     finally{submit.disabled=false;}
   });
 })();
+</script>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+const host = document.getElementById('plmModelViewer');
+const status = document.getElementById('plmPreviewStatus');
+if (host) {
+  const scene = new THREE.Scene();
+  const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.25;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  host.appendChild(renderer.domElement);
+  scene.background = new THREE.Color('#1b232c');
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x667788, 2.3));
+  const key = new THREE.DirectionalLight(0xffffff, 3.0);
+  key.position.set(3, 5, 7); key.castShadow = true; scene.add(key);
+  const fill = new THREE.DirectionalLight(0xa9c9ff, 1.5);
+  fill.position.set(-5, 2, -4); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffffff, 1.1);
+  rim.position.set(1, -3, -5); scene.add(rim);
+  let camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.screenSpacePanning = true;
+  let model = null, center = new THREE.Vector3(), radius = 1, wireframe = false, ortho = false;
+  const viewDirs = {
+    iso:[1, -1, 1], front:[0, -1, 0], rear:[0, 1, 0],
+    top:[0, 0, 1], bottom:[0, 0, -1], left:[-1, 0, 0], right:[1, 0, 0]
+  };
+  // FreeCAD uses Z-up; keep all named views in FreeCAD coordinates.
+  camera.up.set(0, 0, 1);
+  function resize() {
+    const w = host.clientWidth || 800, h = host.clientHeight || 480;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    if (camera.isOrthographicCamera) {
+      const half = radius * 1.9;
+      camera.left = -half * w / h; camera.right = half * w / h;
+      camera.top = half; camera.bottom = -half;
+    }
+    camera.updateProjectionMatrix();
+  }
+  function setView(name) {
+    if (!model) return;
+    const d = new THREE.Vector3(...(viewDirs[name] || viewDirs.iso)).normalize();
+    const distance = Math.max(radius * 3.4, 0.01);
+    camera.position.copy(center).addScaledVector(d, distance);
+    camera.up.set(0, 0, 1);
+    if (name === 'top' || name === 'bottom') camera.up.set(0, 1, 0);
+    controls.target.copy(center); controls.update();
+    camera.near = Math.max(radius / 10000, 0.00001);
+    camera.far = Math.max(radius * 1000, 100);
+    resize();
+  }
+  function toggleProjection() {
+    if (!model) return;
+    const position = camera.position.clone(), target = controls.target.clone();
+    const w = host.clientWidth || 800, h = host.clientHeight || 480;
+    ortho = !ortho;
+    camera = ortho ? new THREE.OrthographicCamera(-radius*1.9*w/h, radius*1.9*w/h, radius*1.9, -radius*1.9, 0.00001, radius*1000)
+                   : new THREE.PerspectiveCamera(45, w/h, 0.00001, radius*1000);
+    camera.position.copy(position); camera.up.set(0,0,1);
+    controls.object = camera; controls.target.copy(target); controls.update();
+    document.getElementById('plmGlbProjection').textContent = ortho ? 'Perspective' : 'Orthographic';
+    resize();
+  }
+  document.querySelectorAll('[data-glb-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.glbView === 'fit' ? 'iso' : b.dataset.glbView)));
+  document.getElementById('plmGlbProjection').addEventListener('click', toggleProjection);
+  document.getElementById('plmGlbWireframe').addEventListener('click', function () {
+    wireframe = !wireframe;
+    if (model) model.traverse(o => {
+      if (!o.isMesh) return;
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { if(m) {m.wireframe = wireframe; m.needsUpdate = true;} });
+    });
+    this.textContent = wireframe ? 'Solid' : 'Wireframe';
+  });
+  document.getElementById('plmGlbBackground').addEventListener('input', e => {
+    scene.background = new THREE.Color(e.target.value);
+  });
+  window.plmLoadGlb = function(url) {
+    new GLTFLoader().load(url, gltf => {
+      if (model) scene.remove(model);
+      model = gltf.scene; scene.add(model);
+      model.traverse(o => { if(o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+      const box = new THREE.Box3().setFromObject(model);
+      if (box.isEmpty()) { status.textContent = 'GLB contains no visible geometry.'; return; }
+      box.getCenter(center); radius = Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.001);
+      setView('iso');
+      status.textContent = 'GLB model loaded. Drag to orbit; scroll to zoom; right-drag to pan.';
+    }, undefined, err => { status.textContent = 'GLB load failed: ' + (err.message || err); });
+  };
+  const observer = new ResizeObserver(resize); observer.observe(host);
+  function render() { requestAnimationFrame(render); if (!host.offsetParent) return; controls.update(); renderer.render(scene, camera); }
+  resize(); render();
+  window.dispatchEvent(new Event('plm-glb-ready'));
+}
 </script>
 </body>
 </html>
