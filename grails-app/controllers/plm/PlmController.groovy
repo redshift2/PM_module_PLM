@@ -218,7 +218,6 @@ class PlmController {
             categories:categories, materials:materials])
     }
 
-    @Transactional
     def savePartMetadata() {
         Long id = params.long('id')
         PlmFreeCadPart part = checkedPart(id)
@@ -273,8 +272,23 @@ class PlmController {
         }
         if (changes) plmEventBridgeService.report('PART_METADATA_EDIT', part,
             (springSecurityService.currentUser as User)?.username, [changes: changes])
-        flash.message='Part metadata saved.' 
-        response.sendRedirect(request.contextPath + '/plm/showPart/' + id.toString())
+        // The original PLM metadata save must not depend on Change Management.
+        // Synchronize only when the DCN value changes and a compatible module is installed.
+        if (values.dcn != previousMetadata.dcn) {
+            try {
+                def ctx = grailsApplication.mainContext
+                if (ctx.containsBean('changeManagementService')) {
+                    def cm = ctx.getBean('changeManagementService')
+                    cm.validatePartDcnMetadata(id, values.dcn)
+                    cm.syncPartDcnMetadata(id, values.dcn)
+                }
+            } catch (Exception ex) {
+                log.warn('DCN association not synchronized for PLM part ' + id + ': ' + ex.message, ex)
+                flash.message = 'Part metadata saved; DCN association could not be synchronized: ' + ex.message
+            }
+        }
+        if (!flash.message) flash.message='Part metadata saved.' 
+        redirect(controller:'plm', action:'showPart', id:id)
     }
 
     def editPart(Long id) {
@@ -300,7 +314,7 @@ class PlmController {
             else if (target != part.lifecycleState?.name()) { response.sendError(409, 'Invalid lifecycle transition'); return }
         } catch (IllegalStateException e) { response.sendError(403,e.message); return }
         flash.message='Lifecycle updated.'
-        response.sendRedirect(request.contextPath + '/plm/showPart/' + id.toString())
+        redirect(controller:'plm', action:'showPart', id:id)
     }
 
     @Transactional
