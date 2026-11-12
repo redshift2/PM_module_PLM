@@ -18,6 +18,7 @@ class PlmController {
     PlmSearchService plmSearchService
     PlmEventBridgeService plmEventBridgeService
     PlmPreviewStorageService plmPreviewStorageService
+    PlmCadWeightService plmCadWeightService
 
     def index() { redirect(action: 'parts') }
 
@@ -100,8 +101,19 @@ class PlmController {
             }
         }
 
+        List<Map> extractedBom = []
+        if (part.cadBomJson) {
+            try {
+                def bomDocument = new groovy.json.JsonSlurper().parseText(part.cadBomJson)
+                if (bomDocument instanceof Map && bomDocument.items instanceof List)
+                    extractedBom = ((List) bomDocument.items).findAll { it instanceof Map }.collect { (Map) it }
+            } catch (Exception ex) {
+                log.warn('Invalid stored CAD BOM for part ' + part.id, ex)
+            }
+        }
+
         render(view: 'showPart', model: [
-            part: part, components: components, cadHistory: cadHistory, attachments: attachments,
+            part: part, components: components, cadHistory: cadHistory, attachments: attachments, extractedBom: extractedBom,
             previewAvailable: plmPreviewStorageService.modelFile(part).isFile() || plmPreviewStorageService.x3dFile(part).isFile(),
             previewGlbAvailable: plmPreviewStorageService.modelFile(part).isFile(),
             previewX3dAvailable: plmPreviewStorageService.x3dFile(part).isFile(),
@@ -254,6 +266,9 @@ class PlmController {
         }
         String lom = params.lom?.trim()
         if (lom && !(lom in ['A','B','C','P'])) { response.sendError(400, 'Invalid LOM'); return }
+        // Calculated mass takes precedence when both CAD volume and a library density exist.
+        BigDecimal calculatedWeight = plmCadWeightService.calculate(part.cadVolumeMm3, values.material)
+        if (calculatedWeight != null) weight = calculatedWeight
         int updated = jdbc.update('''UPDATE plm_free_cad_part SET description1=?, description2=?, description3=?,
             cost=?, weight=?, material=?, supplier=?, surface_treatment=?, lom=?, dcn=?
             WHERE id=? AND active=TRUE AND next_version_id IS NULL''',
@@ -288,7 +303,8 @@ class PlmController {
             }
         }
         if (!flash.message) flash.message='Part metadata saved.' 
-        redirect(controller:'plm', action:'showPart', id:id)
+        response.setStatus(303)
+        response.setHeader('Location', (request.contextPath ?: '') + '/plm/showPart/' + id.toString())
     }
 
     def editPart(Long id) {
@@ -314,7 +330,8 @@ class PlmController {
             else if (target != part.lifecycleState?.name()) { response.sendError(409, 'Invalid lifecycle transition'); return }
         } catch (IllegalStateException e) { response.sendError(403,e.message); return }
         flash.message='Lifecycle updated.'
-        redirect(controller:'plm', action:'showPart', id:id)
+        response.setStatus(303)
+        response.setHeader('Location', (request.contextPath ?: '') + '/plm/showPart/' + id.toString())
     }
 
     @Transactional

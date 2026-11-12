@@ -65,6 +65,15 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
     PlmLevelOfMaturity lom
     String dcn
 
+    // Worker-derived CAD metadata for this exact CAD revision.
+    String cadMetadataJson
+    String cadBomJson
+    String cadAssemblyJson
+    BigDecimal cadVolumeMm3
+    String cadLengthUnit
+    String cadMaterialName
+    String cadDocumentKind
+
     String getDisplayVersion() {
         return "${majorVersion ?: 1}.${minorVersion ?: 0}"
     }
@@ -123,6 +132,13 @@ class PlmFreeCadPart extends TaackDocument implements IDomainHistory<PlmFreeCadP
         surfaceTreatment nullable: true, maxSize: 255
         lom nullable: true
         dcn nullable: true, maxSize: 255
+        cadMetadataJson nullable: true, maxSize: 10485760
+        cadBomJson nullable: true, maxSize: 10485760
+        cadAssemblyJson nullable: true, maxSize: 10485760
+        cadVolumeMm3 nullable: true
+        cadLengthUnit nullable: true, maxSize: 32
+        cadMaterialName nullable: true, maxSize: 255
+        cadDocumentKind nullable: true, maxSize: 32
     }
 
     static hasMany = [

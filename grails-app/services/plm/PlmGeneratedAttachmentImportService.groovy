@@ -9,6 +9,7 @@ import attachment.config.DocumentCategoryEnum
 import crew.User
 import grails.gorm.transactions.Transactional
 import groovy.json.JsonSlurper
+import java.nio.charset.StandardCharsets
 import taack.domain.TaackAttachmentService
 
 import java.nio.file.Files
@@ -31,6 +32,17 @@ class PlmGeneratedAttachmentImportService {
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
         if (!part) throw new IllegalArgumentException('PLM part not found: ' + partId)
 
+        // Name generated documents using the CAD revision submitted with the job.
+        // Never use the current revision for an old queued job without checking it.
+        String cadVersion = (parameters.cadVersion ?: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}").toString()
+        if (parameters.cadVersion && cadVersion != "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}")
+            throw new IllegalStateException('Generated output revision no longer matches current PLM part')
+        String partName = (part.label ?: part.originalName ?: 'part-' + part.id).toString()
+        partName = partName.replaceAll(/(?i)\.(fcstd|step|stp|iges|igs|glb|obj|stl)$/, '')
+        partName = partName.replaceAll(/[^\p{L}\p{N}._-]+/, '_').replaceAll(/^\.+|\.+$/, '').take(100)
+        if (!partName) partName = 'part-' + part.id
+        String prefix = partName + '_v' + cadVersion.replaceAll(/[^0-9A-Za-z._-]/, '_')
+
         // Worker API authentication is token based; currentUser is normally null.
         // Resolve an attributable user from the submitted job instead.
         User actor = job.submittedBy ? User.findByUsername(job.submittedBy.toString()) : null
@@ -49,24 +61,66 @@ class PlmGeneratedAttachmentImportService {
                 if (!name || name.startsWith('/') || name.startsWith('\\') ||
                     name.contains('\\') || name.split('/').contains('..'))
                     throw new IllegalArgumentException('Unsafe worker output path: ' + name)
-                // Metadata is not a generated document.
-                if (name == 'conversion.json' || name == 'manifest.json') continue
+                String sourceName = name.tokenize('/').last()
+                String lower = sourceName.toLowerCase(java.util.Locale.ROOT)
+                // Logs, diagnostics and temporary worker files are never PLM attachments.
+                if (lower == 'conversion.json' || lower == 'manifest.json' ||
+                    lower == 'metadata.json' || lower == 'bom.json' || lower == 'assembly.json' ||
+                    lower.endsWith('.log') || lower.endsWith('.tmp') || lower.endsWith('.trace') ||
+                    lower.endsWith('.pyc') || lower == 'freecad_glb_geometry.json' ||
+                    lower == 'freecad_glb_export.py' || lower == 'freecad_glb_error.log' ||
+                    lower == 'stdout.txt' || lower == 'stderr.txt' ||
+                    lower.startsWith('debug') || lower.startsWith('traceback')) continue
                 if (++attached > 100) throw new IllegalArgumentException('Too many generated attachments')
                 if (entry.size > 100L * 1024 * 1024) throw new IllegalArgumentException('Output file too large')
                 byte[] content = archive.getInputStream(entry).withCloseable { it.bytes }
                 totalBytes += content.length
                 if (totalBytes > 250L * 1024 * 1024) throw new IllegalArgumentException('Result exceeds attachment limit')
                 if (!content.length) throw new IllegalArgumentException('Empty output: ' + name)
-                String filename = name.tokenize('/').last()
+                String filename = sourceName
                 if (!filename || filename in ['.', '..']) throw new IllegalArgumentException('Invalid output filename')
+                String extension = filename.contains('.') ? filename.substring(filename.lastIndexOf('.')) : ''
+                extension = extension.replaceAll(/[^A-Za-z0-9.]/, '').take(18)
+                // Preserve the original file extension, not the worker's generic base name.
+                filename = prefix + extension
                 Attachment attachment = persistAttachment(filename, content, actor)
                 part.addToCommentVersionAttachmentList(attachment)
             }
-            if (!attached) throw new IllegalArgumentException('Worker returned no generated files')
+            // CAD_TO_META may contain only metadata.json/bom.json/assembly.json.
+            // These are consumed by the metadata importer, not generic attachments.
+            // Zero generated attachments is a valid successful result.
+            if (!attached) log.info('No generic generated attachments for job ' + job.id)
             part.save(failOnError: true, flush: true)
         } finally {
             archive.close()
         }
+    }
+
+
+    /** Save the *resolved* assembly JSON after BOM PLM IDs have been assigned.
+     * Re-running a metadata job replaces only the generated assembly JSON attachment
+     * for this CAD version; unrelated attachments remain untouched.
+     */
+    @Transactional
+    void saveResolvedAssemblyJson(Object job, PlmFreeCadPart part, String json) {
+        if (!part || !json) throw new IllegalArgumentException('Missing assembly JSON or part')
+        String cadVersion = "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"
+        String partName = (part.label ?: part.originalName ?: 'part-' + part.id).toString()
+            .replaceAll(/(?i)\.fcstd$/, '')
+            .replaceAll(/[^A-Za-z0-9._-]+/, '_').take(100)
+        String filename = partName + '_v' + cadVersion + '.json'
+        User actor = job?.submittedBy ? User.findByUsername(job.submittedBy.toString()) : null
+        if (!actor) actor = part.userCreated
+        if (!actor) throw new IllegalStateException('No user available for assembly JSON attachment')
+        Attachment generated = persistAttachment(filename, json.getBytes(StandardCharsets.UTF_8), actor)
+        // Remove only an earlier generated JSON with the exact same name.
+        def old = part.commentVersionAttachmentList?.findAll { Attachment a ->
+            a.originalName == filename && a.id != generated.id
+        } ?: []
+        old.each { Attachment a -> part.removeFromCommentVersionAttachmentList(a) }
+        if (!part.commentVersionAttachmentList?.any { Attachment a -> a.id == generated.id })
+            part.addToCommentVersionAttachmentList(generated)
+        part.save(failOnError:true, flush:true)
     }
 
     private static Long parsePartId(Object value) {

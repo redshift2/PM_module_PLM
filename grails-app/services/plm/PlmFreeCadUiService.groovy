@@ -575,7 +575,7 @@ class PlmFreeCadUiService implements WebAttributes, GrailsConfigurationAware {
             PlmFreeCadUiService.inlineMetaRow('Description 2', 'description2', part.description2, 'Last Updated', PlmFreeCadUiService.metadataDate(part.lastUpdated), true),
             PlmFreeCadUiService.inlineMetaRow('Description 3', 'description3', part.description3, 'User Updated', part.userUpdated?.username, true),
             PlmFreeCadUiService.inlineMetaRow('Cost', 'cost', part.cost, 'Embedded Com.', part.comment),
-            PlmFreeCadUiService.inlineMetaRow('Weight', 'weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated)),
+            PlmFreeCadUiService.inlineMetaRow('Weight (kg)', 'weight', part.weight, 'File Date Updated (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileLastUpdated)),
             PlmFreeCadUiService.inlineMetaRow('Material', 'material', part.material, 'File User Updated', part.plmFileUserUpdated, false, isMaterialLibraryAvailable() ? materialSelectorHtml(part.material) : null),
             PlmFreeCadUiService.inlineMetaRow('Supplier', 'supplier', part.supplier, 'File Date Created (UTC)', PlmFreeCadUiService.metadataDate(part.plmFileDateCreated)),
             PlmFreeCadUiService.inlineMetaRow('Surface Treatment', 'surfaceTreatment', part.surfaceTreatment, 'File User Created', part.plmFileUserCreated),

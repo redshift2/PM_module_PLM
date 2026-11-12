@@ -87,19 +87,19 @@
 </div>
 <div class="mat-card-body mat-actions">
 <g:if test="${canCheckOut}">
-<g:form uri="/plm/savePart/${plmPart.id}" method="POST" class="plm-inline">
+<g:form controller="plm" action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="CHECKED_OUT"/>
 <button class="mat-btn mat-btn-primary">${plmPart.lifecycleState?.toString() == 'RELEASED' ? 'Create Revision & Check Out' : 'Check Out'}</button>
 </g:form>
 </g:if>
 <g:if test="${canCancel}">
-<g:form uri="/plm/savePart/${plmPart.id}" method="POST" class="plm-inline">
+<g:form controller="plm" action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="WIP"/>
 <button class="mat-btn">Cancel Check Out</button>
 </g:form>
 </g:if>
 <g:if test="${canRelease}">
-<g:form uri="/plm/releasePart/${plmPart.id}" method="POST" class="plm-inline">
+<g:form controller="plm" action="releasePart" id="${plmPart.id}" method="POST" class="plm-inline">
 <button class="mat-btn mat-btn-primary">Release</button>
 </g:form>
 </g:if>
@@ -126,7 +126,7 @@
 <p>
 <strong>Cost:</strong> ${plmPart.cost ?: '—'}</p>
 <p>
-<strong>Weight:</strong> ${plmPart.weight ?: '—'}</p>
+<strong>Weight (kg):</strong> ${plmPart.weight ?: '—'}</p>
 <p>
 <strong>Surface Treatment:</strong> ${plmPart.surfaceTreatment?.encodeAsHTML() ?: '—'}</p>
 <p>
@@ -218,6 +218,18 @@
 </section>
 </div>
 <div id="plm-tab-bom" class="plm-tab-panel">
+<g:if test="${extractedBom}">
+<section class="mat-card"><div class="mat-card-head"><h2>Extracted CAD BOM — Direct Children Only</h2></div>
+<div class="mat-table-wrap"><table><thead><tr><th>Component</th><th>Type</th><th>Quantity</th><th>Source File</th><th>PLM ID</th></tr></thead><tbody>
+<g:each in="${extractedBom}" var="bomRow"><tr>
+<td>${(bomRow.name ?: 'Unnamed').toString().encodeAsHTML()}</td>
+<td>${(bomRow.type ?: 'unknown').toString().encodeAsHTML()}</td>
+<td>${bomRow.quantity ?: 0}</td>
+<td>${(bomRow.sourceFile ?: '—').toString().encodeAsHTML()}</td>
+<td>${bomRow.partId == null ? '—' : bomRow.partId}</td>
+</tr></g:each></tbody></table></div></section>
+</g:if>
+
 <section class="mat-card">
 <div class="mat-card-head">
 <h2>BOM — Assembly Components</h2>
