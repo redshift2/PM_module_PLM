@@ -19,6 +19,7 @@ class PlmController {
     PlmEventBridgeService plmEventBridgeService
     PlmPreviewStorageService plmPreviewStorageService
     PlmCadVersionFileService plmCadVersionFileService
+    PlmCadWeightService plmCadWeightService
 
     def index() { redirect(action: 'parts') }
 
@@ -439,6 +440,19 @@ class PlmController {
         } catch (NumberFormatException e) { response.sendError(400, 'Invalid cost or weight'); return }
         if ([cost,weight].any { it != null && (it < 0 || it.scale() > 4 || it.precision() - it.scale() > 15) }) {
             response.sendError(400, 'Cost and weight must be nonnegative DECIMAL(19,4)'); return
+        }
+        // Material changes invalidate the previously calculated mass. Recompute
+        // from the stored FreeCAD volume and the selected material density.
+        if (values.material != previousMetadata.material) {
+            if (values.material && part.cadVolumeMm3 != null) {
+                BigDecimal recalculated = plmCadWeightService.calculate(part.cadVolumeMm3, values.material)
+                if (recalculated == null) {
+                    response.sendError(400, 'Unable to calculate weight: material density is missing or invalid'); return
+                }
+                weight = recalculated
+            } else {
+                weight = null
+            }
         }
         String lom = params.lom?.trim()
         if (lom && !(lom in ['A','B','C','P'])) { response.sendError(400, 'Invalid LOM'); return }
