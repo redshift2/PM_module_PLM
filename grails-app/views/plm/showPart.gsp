@@ -41,6 +41,8 @@
 <div class="mat-actions plm-detail-actions">
 <g:link action="parts" class="mat-btn">← Parts</g:link>
 <g:link action="editPartMetadata" id="${plmPart.id}" class="mat-btn mat-btn-primary">Edit Metadata</g:link>
+<button type="button" class="mat-btn mat-btn-primary" id="plmOpenAdvancedViewer" data-part-id="${plmPart.id}" data-queue-url="${createLink(controller:'glbViewer',action:'addToViewer')}" data-viewer-url="${createLink(controller:'glbViewer',action:'index')}">Open in Advanced 3D Viewer</button>
+
 <g:link action="editPartCategory" id="${plmPart.id}" class="mat-btn">Edit Category</g:link>
 <g:link action="addComment" id="${plmPart.id}" class="mat-btn">Edit Comment</g:link>
 <div class="plm-workspace-picker" id="plmWorkspacePicker">
@@ -87,21 +89,21 @@
 </div>
 <div class="mat-card-body mat-actions">
 <g:if test="${canCheckOut}">
-<g:form controller="plm" action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<form action="${request.contextPath}/plm/savePart/${plmPart.id}" method="post" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="CHECKED_OUT"/>
 <button class="mat-btn mat-btn-primary">${plmPart.lifecycleState?.toString() == 'RELEASED' ? 'Create Revision & Check Out' : 'Check Out'}</button>
-</g:form>
+</form>
 </g:if>
 <g:if test="${canCancel}">
-<g:form controller="plm" action="savePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<form action="${request.contextPath}/plm/savePart/${plmPart.id}" method="post" class="plm-inline">
 <input type="hidden" name="lifecycleState" value="WIP"/>
 <button class="mat-btn">Cancel Check Out</button>
-</g:form>
+</form>
 </g:if>
 <g:if test="${canRelease}">
-<g:form controller="plm" action="releasePart" id="${plmPart.id}" method="POST" class="plm-inline">
+<form action="${request.contextPath}/plm/releasePart/${plmPart.id}" method="post" class="plm-inline">
 <button class="mat-btn mat-btn-primary">Release</button>
-</g:form>
+</form>
 </g:if>
 </div>
 </section>
@@ -118,7 +120,9 @@
 <p>
 <strong>Description 3:</strong> ${plmPart.description3?.encodeAsHTML() ?: '—'}</p>
 <p>
-<strong>Material:</strong> ${plmPart.material?.encodeAsHTML() ?: '—'}</p>
+<strong>Measurement units:</strong> ${plmPart.cadLengthUnit?.encodeAsHTML() ?: '—'}<br/>
+<strong>Volume:</strong> ${plmPart.cadVolumeMm3 == null ? '—' : plmPart.cadVolumeMm3.toString().encodeAsHTML() + ' mm³'}</p>
+<p><strong>Material:</strong> ${plmPart.material?.encodeAsHTML() ?: '—'}</p>
 <p>
 <strong>Supplier:</strong> ${plmPart.supplier?.encodeAsHTML() ?: '—'}</p>
 </div>
@@ -135,6 +139,25 @@
 <strong>DCN:</strong> ${plmPart.dcn?.encodeAsHTML() ?: '—'}</p>
 </div>
 </div>
+<div class="mat-card-body">
+<h3 style="margin:0 0 12px">DCN Release History</h3>
+<div style="overflow-x:auto">
+<table class="plm-table" style="width:100%;border-collapse:collapse">
+<thead><tr><th scope="col">DCN</th><th scope="col">Released Version</th><th scope="col">LOM</th><th scope="col">Release Date</th></tr></thead>
+<tbody>
+<g:each in="${dcnReleaseHistory ?: []}" var="release">
+<tr>
+<td><g:link controller="changeManagement" action="dcn" id="${release.dcnId}">${release.dcnNumber?.encodeAsHTML()}</g:link></td>
+<td>${release.version?.encodeAsHTML()}</td>
+<td>${release.lom?.encodeAsHTML()}</td>
+<td><g:if test="${release.releasedAt}"><g:formatDate date="${release.releasedAt}" format="yyyy-MM-dd HH:mm"/></g:if><g:else>—</g:else></td>
+</tr>
+</g:each>
+<g:if test="${!dcnReleaseHistory}"><tr><td colspan="4">No DCN releases recorded for this part.</td></tr></g:if>
+</tbody>
+</table>
+</div>
+</div>
 </section>
 <section class="mat-card">
 <div class="mat-card-head">
@@ -143,7 +166,9 @@
 <div class="mat-card-body plm-pre">${plmPart.comment?.encodeAsHTML() ?: 'No comments.'}</div>
 </section>
 <nav class="plm-detail-tabs" role="tablist" aria-label="Part information">
-<button type="button" class="mat-btn mat-btn-primary" data-plm-tab="bom" aria-selected="true">BOM</button>
+<button type="button" class="mat-btn mat-btn-primary" data-plm-tab="related" aria-selected="true">Related Parts</button>
+<button type="button" class="mat-btn" data-plm-tab="bom" aria-selected="false">BOM</button>
+<button type="button" class="mat-btn" data-plm-tab="drawings" aria-selected="false">Drawings</button>
 <button type="button" class="mat-btn" data-plm-tab="attachments" aria-selected="false">Attachments</button>
 <button type="button" class="mat-btn" data-plm-tab="history" aria-selected="false">CAD History</button>
 <button type="button" class="mat-btn" data-plm-tab="preview" aria-selected="false">3D Preview</button>
@@ -199,6 +224,47 @@
 </div>
 </section>
 </div>
+<div id="plm-tab-drawings" class="plm-tab-panel" hidden>
+<section class="mat-card">
+<div class="mat-card-head"><h2>Drawings — CAD Version ${plmPart.majorVersion ?: 1}.${plmPart.minorVersion == null ? 0 : plmPart.minorVersion}</h2></div>
+<div class="mat-card-body">
+<p>Drawings inherit this CAD version's lifecycle state: <strong>${plmPart.lifecycleState?.toString()?.encodeAsHTML()}</strong>.</p>
+<g:if test="${drawingVersions?.size() > 1}">
+<label for="plmDrawingVersion">CAD version:</label>
+<select id="plmDrawingVersion" aria-label="Select drawing CAD version" onchange="if(this.value) window.location.href=this.value">
+<g:each in="${drawingVersions}" var="dv">
+<option value="${createLink(controller:'plm',action:'showPart',id:dv.id)}#plm-tab-drawings" ${dv.id == plmPart.id ? 'selected="selected"' : ''}>v${dv.version?.encodeAsHTML()} — ${dv.lifecycle?.encodeAsHTML()}</option>
+</g:each>
+</select>
+</g:if>
+<g:if test="${managedDrawings}">
+<div class="mat-table-wrap"><table><thead><tr><th>Drawing</th><th>Added</th><th>Action</th></tr></thead><tbody>
+<g:each in="${managedDrawings}" var="drawing">
+<tr><td>${drawing.name?.encodeAsHTML()}</td><td><g:formatDate date="${drawing.created}" format="yyyy-MM-dd HH:mm"/></td>
+<td><g:link controller="plmManagedFile" action="download" id="${drawing.id}" class="mat-btn">Download</g:link>
+<g:if test="${drawing.name?.toLowerCase()?.endsWith('.pdf')}"><g:link controller="plmManagedFile" action="previewPdf" id="${drawing.id}" target="_blank" rel="noopener" class="mat-btn">Preview PDF</g:link></g:if>
+<g:if test="${canUploadDrawing}">
+<form action="${createLink(controller:'plmManagedFile',action:'removeDrawing',id:drawing.id)}" method="post" style="display:inline" onsubmit="return confirm('Remove this drawing from the current CAD version? The original attachment will be retained.');">
+<button type="submit" class="mat-btn">Remove</button></form>
+</g:if></td></tr>
+</g:each>
+</tbody></table></div>
+</g:if>
+<g:else><p>No managed drawings are registered for this CAD version yet. Existing legacy attachments are still available under Attachments.</p></g:else>
+<g:if test="${canUploadDrawing}">
+<form action="${createLink(controller:'plmManagedFile',action:'uploadDrawing')}" method="post" enctype="multipart/form-data" style="margin-top:16px">
+<input type="hidden" name="partId" value="${plmPart.id}"/>
+<label for="plmDrawingFile">Add drawing (PDF or SVG)</label>
+<input id="plmDrawingFile" type="file" name="drawing" accept=".pdf,.svg,application/pdf,image/svg+xml" required/>
+<button class="mat-btn mat-btn-primary" type="submit">Upload Drawing</button>
+<g:if test="${managedDrawings}"><label for="plmDrawingReplace">Or replace an existing drawing:</label>
+<select id="plmDrawingReplace" name="replaceId"><option value="">Add as new drawing</option>
+<g:each in="${managedDrawings}" var="d"><option value="${d.id}">${d.name?.encodeAsHTML()}</option></g:each>
+</select></g:if>
+</form>
+</g:if>
+<g:else><p>Drawing uploads require the CAD version to be checked out by you. Released drawings are read-only.</p></g:else>
+</div></section></div>
 <div id="plm-tab-attachments" class="plm-tab-panel" hidden>
 <section class="mat-card">
 <div class="mat-card-head"><h2>Attachments</h2></div>
@@ -217,7 +283,7 @@
 </div>
 </section>
 </div>
-<div id="plm-tab-bom" class="plm-tab-panel">
+<div id="plm-tab-bom" class="plm-tab-panel" hidden>
 <g:if test="${extractedBom}">
 <section class="mat-card"><div class="mat-card-head"><h2>Extracted CAD BOM — Direct Children Only</h2></div>
 <div class="mat-table-wrap"><table><thead><tr><th>Component</th><th>Type</th><th>Quantity</th><th>Source File</th><th>PLM ID</th></tr></thead><tbody>
@@ -230,9 +296,12 @@
 </tr></g:each></tbody></table></div></section>
 </g:if>
 
+
+</div>
+<div id="plm-tab-related" class="plm-tab-panel">
 <section class="mat-card">
 <div class="mat-card-head">
-<h2>BOM — Assembly Components</h2>
+<h2>Related Parts</h2>
 </div>
 <div class="mat-table-wrap">
 <table>
@@ -279,7 +348,20 @@
 <td>${historyRow.version?.encodeAsHTML()}</td>
 <td>${historyRow.lifecycle?.encodeAsHTML()}</td>
 <td>${historyRow.updated ?: '—'}</td>
-<td><g:link controller="plm" action="downloadBinPart" id="${plmPart.id}" params="${[partVersion:historyRow.index]}" class="mat-btn">Download ZIP</g:link></td>
+<td>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+    <g:link controller="plm" action="downloadBinPart" id="${plmPart.id}" params="${[partVersion:historyRow.index]}" class="mat-btn">FreeCAD Part</g:link>
+    <g:if test="${historyRow.glbFileId != null}">
+      <g:link controller="plmManagedFile" action="download" id="${historyRow.glbFileId}" class="mat-btn">GLB</g:link>
+    </g:if>
+    <g:elseif test="${historyRow.previewGlbRevisionId != null}">
+      <g:link controller="plm" action="downloadHistoryPreviewGlb" id="${plmPart.id}" params="${[revisionId: historyRow.previewGlbRevisionId]}" class="mat-btn">GLB</g:link>
+    </g:elseif>
+    <g:if test="${historyRow.asmjFileId != null}">
+      <g:link controller="plmManagedFile" action="download" id="${historyRow.asmjFileId}" class="mat-btn">ASMJ</g:link>
+    </g:if>
+  </div>
+</td>
 </tr>
 </g:each>
 </tbody>
@@ -378,7 +460,8 @@
     button.addEventListener('click', function () { if (button.getAttribute('data-plm-tab') === 'preview') loadPreview(); });
   });
   if (window.location.hash === '#plm-tab-preview') { selectTab('preview'); loadPreview(); }
-  else selectTab('bom');
+  else if (window.location.hash === '#plm-tab-drawings') selectTab('drawings');
+  else selectTab('related');
 })();
 </script>
 <style>
@@ -554,3 +637,23 @@ if (host) {
 </div>
 <g:render template="/shared/pmShellScript"/>
 </div>
+
+<script>
+(function(){
+  const btn=document.getElementById('plmOpenAdvancedViewer');
+  if(!btn)return;
+  btn.addEventListener('click',async function(){
+    btn.disabled=true;
+    try {
+      const response=await fetch(btn.dataset.queueUrl,{
+        method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({type:'glb',partId:Number(btn.dataset.partId),origin:'PLM Part Details'})
+      });
+      const data=await response.json();
+      if(!response.ok||!data.queued)throw Error(data.error||'Unable to queue model');
+      window.location.href=btn.dataset.viewerUrl;
+    }catch(err){alert('Unable to open Advanced 3D Viewer: '+err.message);btn.disabled=false;}
+  });
+})();
+</script>

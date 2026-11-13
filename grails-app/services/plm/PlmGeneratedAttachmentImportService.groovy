@@ -9,7 +9,6 @@ import attachment.config.DocumentCategoryEnum
 import crew.User
 import grails.gorm.transactions.Transactional
 import groovy.json.JsonSlurper
-import java.nio.charset.StandardCharsets
 import taack.domain.TaackAttachmentService
 
 import java.nio.file.Files
@@ -21,6 +20,7 @@ import java.util.zip.ZipFile
 /** Stores ordinary worker outputs on the originating PLM part. */
 class PlmGeneratedAttachmentImportService {
     TaackAttachmentService taackAttachmentService
+    PlmCadVersionFileService plmCadVersionFileService
 
     @Transactional
     void importJobResult(Object job, Path resultZip) {
@@ -32,16 +32,13 @@ class PlmGeneratedAttachmentImportService {
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
         if (!part) throw new IllegalArgumentException('PLM part not found: ' + partId)
 
-        // Name generated documents using the CAD revision submitted with the job.
-        // Never use the current revision for an old queued job without checking it.
-        String cadVersion = (parameters.cadVersion ?: "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}").toString()
-        if (parameters.cadVersion && cadVersion != "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}")
-            throw new IllegalStateException('Generated output revision no longer matches current PLM part')
-        String partName = (part.label ?: part.originalName ?: 'part-' + part.id).toString()
-        partName = partName.replaceAll(/(?i)\.(fcstd|step|stp|iges|igs|glb|obj|stl)$/, '')
-        partName = partName.replaceAll(/[^\p{L}\p{N}._-]+/, '_').replaceAll(/^\.+|\.+$/, '').take(100)
-        if (!partName) partName = 'part-' + part.id
-        String prefix = partName + '_v' + cadVersion.replaceAll(/[^0-9A-Za-z._-]/, '_')
+        // A queued job must not silently register its output on a newer CAD revision.
+        // Workers should submit cadMajorVersion/cadMinorVersion in job parameters.
+        if (parameters.cadMajorVersion != null && parameters.cadMinorVersion != null) {
+            if (parameters.cadMajorVersion.toString() != (part.majorVersion ?: 1).toString() ||
+                parameters.cadMinorVersion.toString() != (part.minorVersion ?: 0).toString())
+                throw new IllegalStateException('Worker result targets a different CAD revision')
+        }
 
         // Worker API authentication is token based; currentUser is normally null.
         // Resolve an attributable user from the submitted job instead.
@@ -61,66 +58,92 @@ class PlmGeneratedAttachmentImportService {
                 if (!name || name.startsWith('/') || name.startsWith('\\') ||
                     name.contains('\\') || name.split('/').contains('..'))
                     throw new IllegalArgumentException('Unsafe worker output path: ' + name)
-                String sourceName = name.tokenize('/').last()
-                String lower = sourceName.toLowerCase(java.util.Locale.ROOT)
-                // Logs, diagnostics and temporary worker files are never PLM attachments.
-                if (lower == 'conversion.json' || lower == 'manifest.json' ||
-                    lower == 'metadata.json' || lower == 'bom.json' || lower == 'assembly.json' ||
-                    lower.endsWith('.log') || lower.endsWith('.tmp') || lower.endsWith('.trace') ||
-                    lower.endsWith('.pyc') || lower == 'freecad_glb_geometry.json' ||
-                    lower == 'freecad_glb_export.py' || lower == 'freecad_glb_error.log' ||
-                    lower == 'stdout.txt' || lower == 'stderr.txt' ||
-                    lower.startsWith('debug') || lower.startsWith('traceback')) continue
+                // Metadata is not a generated document.
+                if (name == 'conversion.json' || name == 'manifest.json') continue
                 if (++attached > 100) throw new IllegalArgumentException('Too many generated attachments')
                 if (entry.size > 100L * 1024 * 1024) throw new IllegalArgumentException('Output file too large')
                 byte[] content = archive.getInputStream(entry).withCloseable { it.bytes }
                 totalBytes += content.length
                 if (totalBytes > 250L * 1024 * 1024) throw new IllegalArgumentException('Result exceeds attachment limit')
                 if (!content.length) throw new IllegalArgumentException('Empty output: ' + name)
-                String filename = sourceName
+                String filename = name.tokenize('/').last()
                 if (!filename || filename in ['.', '..']) throw new IllegalArgumentException('Invalid output filename')
-                String extension = filename.contains('.') ? filename.substring(filename.lastIndexOf('.')) : ''
-                extension = extension.replaceAll(/[^A-Za-z0-9.]/, '').take(18)
-                // Preserve the original file extension, not the worker's generic base name.
-                filename = prefix + extension
+                String engineeringType = engineeringFileType(filename)
+                // CAD_TO_META's dedicated importer has already registered the
+                // server-resolved assembly. The raw worker ASMJ still contains
+                // unresolved partId values; never let it replace that attachment.
+                if (job.jobType?.toString() == 'CAD_TO_META' && engineeringType == 'ASSEMBLY') {
+                    log.info('Skipping raw CAD_TO_META ASMJ part={} job={} filename={}; resolved ASMJ is registered by metadata importer',
+                        part.id, job.id, filename)
+                    continue
+                }
                 Attachment attachment = persistAttachment(filename, content, actor)
-                part.addToCommentVersionAttachmentList(attachment)
+                if (engineeringType != null) {
+                    // The registry owns engineering associations; do not duplicate them
+                    // in the unversioned comment-attachment list.
+                    plmCadVersionFileService.register(part.id as Long, attachment.id as Long,
+                        engineeringType, job.id?.toString())
+                } else {
+                    part.addToCommentVersionAttachmentList(attachment)
+                }
             }
-            // CAD_TO_META may contain only metadata.json/bom.json/assembly.json.
-            // These are consumed by the metadata importer, not generic attachments.
-            // Zero generated attachments is a valid successful result.
-            if (!attached) log.info('No generic generated attachments for job ' + job.id)
+            if (!attached) throw new IllegalArgumentException('Worker returned no generated files')
             part.save(failOnError: true, flush: true)
         } finally {
             archive.close()
         }
     }
 
-
-    /** Save the *resolved* assembly JSON after BOM PLM IDs have been assigned.
-     * Re-running a metadata job replaces only the generated assembly JSON attachment
-     * for this CAD version; unrelated attachments remain untouched.
+    /**
+     * Store the server-resolved assembly as an ASMJ engineering attachment.
+     * CAD_TO_META uses a dedicated importer, so its result ZIP never passes
+     * through importJobResult().
      */
     @Transactional
-    void saveResolvedAssemblyJson(Object job, PlmFreeCadPart part, String json) {
-        if (!part || !json) throw new IllegalArgumentException('Missing assembly JSON or part')
-        String cadVersion = "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"
-        String partName = (part.label ?: part.originalName ?: 'part-' + part.id).toString()
-            .replaceAll(/(?i)\.fcstd$/, '')
-            .replaceAll(/[^A-Za-z0-9._-]+/, '_').take(100)
-        String filename = partName + '_v' + cadVersion + '.json'
-        User actor = job?.submittedBy ? User.findByUsername(job.submittedBy.toString()) : null
+    Attachment saveResolvedAssemblyJson(Object job, PlmFreeCadPart part, String resolvedJson) {
+        if (!job || !part || !resolvedJson?.trim())
+            throw new IllegalArgumentException('Missing job, part, or resolved assembly JSON')
+        if (job.jobType?.toString() != 'CAD_TO_META')
+            throw new IllegalArgumentException('Only CAD_TO_META may save a resolved ASMJ')
+        if (part.active != true || part.nextVersion != null ||
+            part.lifecycleState == PlmPartLifecycleState.RELEASED)
+            throw new IllegalStateException('Cannot register ASMJ on a historical or released part')
+
+        Map parameters = (Map) new JsonSlurper().parseText(job.parametersJson ?: '{}')
+        if (parameters.partId != null && parameters.partId.toString() != part.id.toString())
+            throw new IllegalStateException('Metadata job targets a different part')
+        String version = "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"
+        if (parameters.cadVersion != null && parameters.cadVersion.toString() != version)
+            throw new IllegalStateException('Metadata job targets a different CAD version')
+        if (parameters.cadSha1 != null &&
+            !parameters.cadSha1.toString().equalsIgnoreCase(part.plmContentShaOne ?: ''))
+            throw new IllegalStateException('Metadata job targets a different CAD file')
+
+        def parsed = new JsonSlurper().parseText(resolvedJson)
+        if (!(parsed instanceof Map) || parsed.format?.toString() != 'PartsManagerAssembly')
+            throw new IllegalArgumentException('Invalid resolved ASMJ document')
+        byte[] bytes = resolvedJson.getBytes('UTF-8')
+        if (bytes.length > 10L * 1024 * 1024)
+            throw new IllegalArgumentException('Resolved ASMJ exceeds 10 MB')
+
+        User actor = job.submittedBy ? User.findByUsername(job.submittedBy.toString()) : null
         if (!actor) actor = part.userCreated
-        if (!actor) throw new IllegalStateException('No user available for assembly JSON attachment')
-        Attachment generated = persistAttachment(filename, json.getBytes(StandardCharsets.UTF_8), actor)
-        // Remove only an earlier generated JSON with the exact same name.
-        def old = part.commentVersionAttachmentList?.findAll { Attachment a ->
-            a.originalName == filename && a.id != generated.id
-        } ?: []
-        old.each { Attachment a -> part.removeFromCommentVersionAttachmentList(a) }
-        if (!part.commentVersionAttachmentList?.any { Attachment a -> a.id == generated.id })
-            part.addToCommentVersionAttachmentList(generated)
-        part.save(failOnError:true, flush:true)
+        if (!actor) throw new IllegalStateException('No user available to own ASMJ attachment')
+
+        // Stable filename plus content SHA-1 makes repeated result submission idempotent.
+        Attachment attachment = persistAttachment('assembly.asmj', bytes, actor)
+        plmCadVersionFileService.register(part.id as Long, attachment.id as Long,
+            'ASSEMBLY', job.id?.toString())
+        return attachment
+    }
+
+    private static String engineeringFileType(String filename) {
+        String lower = filename.toLowerCase(java.util.Locale.ROOT)
+        if (lower.endsWith('.glb')) return 'GLB'
+        if (lower.endsWith('.asmj')) return 'ASSEMBLY'
+        if (lower.endsWith('.pdf') || lower.endsWith('.svg')) return 'DRAWING'
+        if (lower.endsWith('.fcstd')) return 'CAD'
+        return null
     }
 
     private static Long parsePartId(Object value) {

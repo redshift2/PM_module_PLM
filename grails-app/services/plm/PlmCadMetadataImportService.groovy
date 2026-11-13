@@ -37,12 +37,13 @@ class PlmCadMetadataImportService {
             String kind = (metadata.kind ?: '').toString()
             if (!(kind in ['part','assembly'])) throw new IllegalArgumentException('Unknown CAD kind')
             Map bom = readJson(archive, 'bom.json', kind == 'assembly')
-            Map assembly = readJson(archive, 'assembly.json', kind == 'assembly')
+            Map assembly = readJson(archive, 'assembly.asmj', kind == 'assembly')
             if (kind == 'assembly' && (bom.scope != 'immediate-children' || !(bom.items instanceof List)))
                 throw new IllegalArgumentException('Invalid one-level assembly BOM')
             part.cadMetadataJson = JsonOutput.toJson(metadata)
             if (kind == 'assembly') {
                 resolveComponentIds(bom, assembly)
+                log.info("CAD_TO_META part ${part.id}: BOM rows=${bom?.items?.size() ?: 0}, assembly nodes=${assembly?.nodes?.size() ?: 0}")
             }
             part.cadBomJson = bom == null ? null : JsonOutput.toJson(bom)
             part.cadAssemblyJson = assembly == null ? null : JsonOutput.toJson(assembly)
@@ -79,7 +80,7 @@ class PlmCadMetadataImportService {
     /** Resolve components using only the PLM catalogue; worker output remains untouched.
      *  Ambiguous filenames are deliberately left unresolved.
      */
-    private static void resolveComponentIds(Map bom, Map assembly) {
+    private void resolveComponentIds(Map bom, Map assembly) {
         List<PlmFreeCadPart> latest = PlmFreeCadPart.findAllByActive(true).findAll {
             PlmFreeCadPart p -> p.nextVersion == null
         }
@@ -89,7 +90,12 @@ class PlmCadMetadataImportService {
             if (!(value instanceof Map)) return
             Map row = (Map) value
             PlmFreeCadPart match = findComponent(row, latest)
-            if (!match) return
+            if (!match) {
+                String source = normalizedSource(row.sourceFile)
+                List candidates = source ? matchesForSource(source, latest) : []
+                log.warn("CAD BOM unresolved sourceFile='${row.sourceFile}' normalized='${source}' matches=${candidates.size()} candidateIds=${candidates.collect { it.id }}")
+                return
+            }
             applyResolvedMetadata(row, match)
             String key = row.componentKey?.toString() ?: row.key?.toString()
             if (key) byKey[key] = match
@@ -104,7 +110,7 @@ class PlmCadMetadataImportService {
         resolveNodes(nodes, latest, byKey)
     }
 
-    private static void resolveNodes(List nodes, List<PlmFreeCadPart> latest,
+    private void resolveNodes(List nodes, List<PlmFreeCadPart> latest,
                                      Map<String, PlmFreeCadPart> byKey) {
         nodes.each { Object value ->
             if (!(value instanceof Map)) return
@@ -116,7 +122,14 @@ class PlmCadMetadataImportService {
                 if (source) match = byKey['source:' + source.toLowerCase(java.util.Locale.ROOT)]
             }
             if (!match) match = findComponent(node, latest)
-            if (match) applyResolvedMetadata(node, match)
+            if (match) {
+                applyResolvedMetadata(node, match)
+                log.info("CAD assembly resolved sourceFile='${node.sourceFile}' -> partId=${match.id}")
+            } else if (node.sourceFile) {
+                String source = normalizedSource(node.sourceFile)
+                List candidates = matchesForSource(source, latest)
+                log.warn("CAD assembly unresolved sourceFile='${node.sourceFile}' normalized='${source}' matches=${candidates.size()} candidateIds=${candidates.collect { it.id }}")
+            }
             if (node.children instanceof List) resolveNodes((List) node.children, latest, byKey)
         }
     }
@@ -133,21 +146,29 @@ class PlmCadMetadataImportService {
         return matches.size() == 1 ? matches[0] : null
     }
 
+    /** Compare normalized basenames and stems, without guessing among duplicates. */
     private static List<PlmFreeCadPart> matchesForSource(String source,
                                                           List<PlmFreeCadPart> latest) {
-        String basename = source.replaceFirst(/(?i)\.fcstd$/, '')
+        String wanted = sourceStem(source)
+        if (!wanted) return []
         latest.findAll { PlmFreeCadPart p ->
-            String original = normalizedSource(p.originalName)
-            String label = p.label?.toString()
-            original?.equalsIgnoreCase(source) ||
-                original?.replaceFirst(/(?i)\.fcstd$/, '')?.equalsIgnoreCase(basename) ||
-                label?.equalsIgnoreCase(basename)
+            String original = sourceStem(p.originalName)
+            String label = sourceStem(p.label)
+            (original && original.equalsIgnoreCase(wanted)) ||
+                (label && label.equalsIgnoreCase(wanted))
         }
+    }
+
+    private static String sourceStem(Object value) {
+        String text = value?.toString()?.trim()?.replace('\\', '/')
+        if (!text) return null
+        String base = text.tokenize('/')?.last()?.trim()
+        return base?.replaceFirst(/(?i)(\.fcstd)+$/, '')?.trim()
     }
 
     private static String normalizedSource(Object value) {
         String text = value?.toString()?.trim()?.replace('\\', '/')
-        return text ? text.tokenize('/')?.last() : null
+        return text ? text.tokenize('/')?.last()?.trim() : null
     }
 
     private static void applyResolvedMetadata(Map component, PlmFreeCadPart part) {

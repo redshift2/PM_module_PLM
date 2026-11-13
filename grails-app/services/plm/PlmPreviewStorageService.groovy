@@ -7,6 +7,15 @@ class PlmPreviewStorageService {
     @Value('${plm.preview.storage:${PLM_PREVIEW_STORAGE:/var/lib/parts-manager/plm-previews}}')
     String storageDirectory
 
+    /** Resolve an immutable preview path by original part ID and exact CAD version.
+     *  Historical snapshot rows have different IDs from the active part.
+     */
+    File modelFileForVersion(Long originalPartId, Integer major, Integer minor) {
+        if (originalPartId == null || originalPartId < 1L || major == null || major < 1 || minor == null || minor < 0)
+            throw new IllegalArgumentException('Invalid part ID or CAD version')
+        new File(new File(new File(storageDirectory, originalPartId.toString()), "${major}.${minor}"), 'model.glb')
+    }
+
     File modelFile(PlmFreeCadPart part) {
         // Only server-generated numeric identifiers are used in the path.
         String version = "${part.majorVersion == null ? 1 : part.majorVersion}.${part.minorVersion == null ? 0 : part.minorVersion}"

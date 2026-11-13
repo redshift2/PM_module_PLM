@@ -18,7 +18,7 @@ class PlmController {
     PlmSearchService plmSearchService
     PlmEventBridgeService plmEventBridgeService
     PlmPreviewStorageService plmPreviewStorageService
-    PlmCadWeightService plmCadWeightService
+    PlmCadVersionFileService plmCadVersionFileService
 
     def index() { redirect(action: 'parts') }
 
@@ -82,15 +82,89 @@ class PlmController {
             }
         }
 
+        // CAD_TO_META stores extracted BOM rows in cadBomJson.items. The
+        // PLM link association is a separate, optional source of related parts.
+        List<Map> extractedBom = []
+        try {
+            def bomJson = part.cadBomJson
+            if (bomJson) {
+                def parsed = new groovy.json.JsonSlurper().parseText(bomJson.toString())
+                def rows = parsed instanceof Map ? parsed.items : parsed
+                if (rows instanceof Collection) {
+                    rows.each { row ->
+                        if (row instanceof Map) extractedBom.add(new LinkedHashMap(row))
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Unable to read extracted CAD BOM for part ${part.id}: ${ex.message}")
+        }
+
+        // Include BOM-resolved components in Related Parts even when legacy
+        // PlmFreeCadLink relationships have not been created.
+        Set<Long> relatedIds = components.collect { it.id as Long } as Set<Long>
+        extractedBom.each { row ->
+            Long childId = null
+            try {
+                def rawId = row.partId ?: row.id
+                if (rawId != null) childId = rawId.toString().toLong()
+            } catch (Exception ignored) { }
+            if (childId != null && !relatedIds.contains(childId)) {
+                PlmFreeCadPart child = PlmFreeCadPart.get(childId)
+                if (child != null && plmFreeCadSecurityService.canDownloadFile(child)) {
+                    components.add([
+                        id: child.id,
+                        label: child.label ?: child.originalName ?: row.name ?: 'Unnamed part',
+                        linkVersion: child.majorVersion == null || child.minorVersion == null ?
+                            null : "${child.majorVersion}.${child.minorVersion}"
+                    ])
+                    relatedIds.add(childId)
+                }
+            }
+        }
+
         List<Map> cadHistory = []
         int historyIndex = 0
         for (PlmFreeCadPart revision : (part.history ?: [])) {
+            Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
+            Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
+            // Registry entries may be attached to the root part or the historical
+            // revision row. Never use files from another CAD version.
+            List<PlmCadVersionFile> versionFiles = []
+            for (Long registryPartId : ([part.id, revision.id].unique())) {
+                versionFiles.addAll(plmCadVersionFileService.listForVersion(registryPartId, major, minor))
+            }
+            // Preview storage is keyed by the stable active part ID plus CAD
+            // version. Historical snapshots are separate database rows and
+            // must not be used as the sole preview storage key.
+            File legacyGlb = plmPreviewStorageService.modelFileForVersion(part.id, major, minor)
+            if (!legacyGlb.isFile() && revision.id != part.id) {
+                // Compatibility with previews written against snapshot IDs.
+                legacyGlb = plmPreviewStorageService.modelFileForVersion(revision.id, major, minor)
+            }
+            PlmCadVersionFile glbFile = versionFiles.find { it.fileType == 'GLB' }
+            // Prefer the latest registry association if legacy duplicates remain.
+            // Prefer the active part's entry over a historical snapshot for the
+            // same CAD version; do not change any other file selection logic.
+            PlmCadVersionFile asmjFile = versionFiles.findAll {
+                it.fileType == 'ASSEMBLY' &&
+                    it.originalName?.toLowerCase(java.util.Locale.ROOT)?.endsWith('.asmj')
+            }.sort { a, b ->
+                int aPriority = a.part?.id == part.id ? 1 : 0
+                int bPriority = b.part?.id == part.id ? 1 : 0
+                (bPriority <=> aPriority) ?: ((b.id ?: 0L) <=> (a.id ?: 0L))
+            }.find { true }
             cadHistory.add([
                 index: historyIndex++,
                 previewTimestamp: revision.mTimeNs ?: part.mTimeNs,
-                version: "${revision.majorVersion == null ? 1 : revision.majorVersion}.${revision.minorVersion == null ? 0 : revision.minorVersion}",
+                version: "${major}.${minor}",
                 lifecycle: revision.lifecycleState?.toString() ?: '—',
-                updated: revision.lastUpdated
+                updated: revision.lastUpdated,
+                glbFileId: glbFile?.id,
+                // Legacy 3D previews are stored outside the managed-file registry.
+                // Check the exact historical revision's preview path, not the latest part.
+                previewGlbRevisionId: (!glbFile && legacyGlb.isFile()) ? revision.id : null,
+                asmjFileId: asmjFile?.id
             ])
         }
 
@@ -101,19 +175,37 @@ class PlmController {
             }
         }
 
-        List<Map> extractedBom = []
-        if (part.cadBomJson) {
-            try {
-                def bomDocument = new groovy.json.JsonSlurper().parseText(part.cadBomJson)
-                if (bomDocument instanceof Map && bomDocument.items instanceof List)
-                    extractedBom = ((List) bomDocument.items).findAll { it instanceof Map }.collect { (Map) it }
-            } catch (Exception ex) {
-                log.warn('Invalid stored CAD BOM for part ' + part.id, ex)
+        // Query the optional Change Management module without a compile-time dependency.
+        List<Map> dcnReleaseHistory = []
+        try {
+            Class dcnPartClass = grailsApplication.classLoader.loadClass('changemanagement.DcnPart')
+            List revisions = ([part] + (part.history ?: []).findAll { it != null }).unique { it.id }
+            List links = dcnPartClass.findAllByPartInList(revisions)
+            links.each { link ->
+                if (link.dcn?.status?.toString() == 'RELEASED') {
+                    def versionPart = revisions.find { revision ->
+                        revision?.majorVersion == link.majorVersion &&
+                        revision?.minorVersion == link.minorVersion
+                    }
+                    dcnReleaseHistory << [
+                        dcnId: link.dcn.id,
+                        dcnNumber: link.dcn.dcnNumber?.toString(),
+                        version: "${link.majorVersion == null ? 1 : link.majorVersion}.${link.minorVersion == null ? 0 : link.minorVersion}",
+                        lom: versionPart?.lom?.toString() ?: '—',
+                        releasedAt: versionPart?.releasedAt
+                    ]
+                }
             }
+            dcnReleaseHistory.sort { a, b ->
+                (b.releasedAt ?: new Date(0)) <=> (a.releasedAt ?: new Date(0))
+            }
+        } catch (ClassNotFoundException ignored) {
+            // Change Management module not installed.
         }
 
         render(view: 'showPart', model: [
-            part: part, components: components, cadHistory: cadHistory, attachments: attachments, extractedBom: extractedBom,
+            part: part, components: components, extractedBom: extractedBom, cadHistory: cadHistory, attachments: attachments,
+            dcnReleaseHistory: dcnReleaseHistory,
             previewAvailable: plmPreviewStorageService.modelFile(part).isFile() || plmPreviewStorageService.x3dFile(part).isFile(),
             previewGlbAvailable: plmPreviewStorageService.modelFile(part).isFile(),
             previewX3dAvailable: plmPreviewStorageService.x3dFile(part).isFile(),
@@ -121,6 +213,31 @@ class PlmController {
             canRelease: plmFreeCadSecurityService.canReleasePart(part, springSecurityService.currentUser as User),
             canCancel: plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
         ])
+    }
+
+    /** Download a legacy GLB preview belonging to a specific historical CAD revision.
+     *  The parent part is permission-checked, and revision membership is verified.
+     */
+    def downloadHistoryPreviewGlb(Long id, Long revisionId) {
+        PlmFreeCadPart part = checkedPart(id)
+        if (!part || revisionId == null) { response.sendError(404); return }
+        PlmFreeCadPart revision = (part.history ?: []).find { it?.id == revisionId }
+        if (!revision) { response.sendError(404); return }
+        Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
+        Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
+        File model = plmPreviewStorageService.modelFileForVersion(part.id, major, minor)
+        if (!model.isFile() && revision.id != part.id) {
+            model = plmPreviewStorageService.modelFileForVersion(revision.id, major, minor)
+        }
+        if (!model.isFile()) { response.sendError(404); return }
+        String version = "${revision.majorVersion == null ? 1 : revision.majorVersion}.${revision.minorVersion == null ? 0 : revision.minorVersion}"
+        response.contentType = 'model/gltf-binary'
+        response.setHeader('Content-Disposition', 'attachment; filename="plm-part-' + part.id + '-v' + version + '.glb"')
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        response.setHeader('Cache-Control', 'private, no-store')
+        response.setContentLengthLong(model.length())
+        model.withInputStream { input -> response.outputStream << input }
+        response.outputStream.flush()
     }
 
     /** Serve only the GLB stored for this exact part and CAD revision. */
@@ -266,9 +383,6 @@ class PlmController {
         }
         String lom = params.lom?.trim()
         if (lom && !(lom in ['A','B','C','P'])) { response.sendError(400, 'Invalid LOM'); return }
-        // Calculated mass takes precedence when both CAD volume and a library density exist.
-        BigDecimal calculatedWeight = plmCadWeightService.calculate(part.cadVolumeMm3, values.material)
-        if (calculatedWeight != null) weight = calculatedWeight
         int updated = jdbc.update('''UPDATE plm_free_cad_part SET description1=?, description2=?, description3=?,
             cost=?, weight=?, material=?, supplier=?, surface_treatment=?, lom=?, dcn=?
             WHERE id=? AND active=TRUE AND next_version_id IS NULL''',
