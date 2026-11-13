@@ -142,21 +142,41 @@
 <div class="mat-card-body">
 <h3 style="margin:0 0 12px">DCN Release History</h3>
 <div style="overflow-x:auto">
-<table class="plm-table" style="width:100%;border-collapse:collapse">
-<thead><tr><th scope="col">DCN</th><th scope="col">Released Version</th><th scope="col">LOM</th><th scope="col">Release Date</th></tr></thead>
+<table class="plm-table plm-dcn-history-table" style="width:100%;border-collapse:collapse">
 <tbody>
+<tr class="plm-dcn-history-head"><th scope="col">Status</th><th scope="col">LOM</th><th scope="col">Version</th><th scope="col">DCN</th><th scope="col">DCN Approved Date</th><th scope="col">User</th></tr>
 <g:each in="${dcnReleaseHistory ?: []}" var="release">
 <tr>
-<td><g:link controller="changeManagement" action="dcn" id="${release.dcnId}">${release.dcnNumber?.encodeAsHTML()}</g:link></td>
-<td>${release.version?.encodeAsHTML()}</td>
+<td><span class="plm-dcn-status plm-dcn-${release.status?.toLowerCase()}">${release.status?.encodeAsHTML()}</span></td>
 <td>${release.lom?.encodeAsHTML()}</td>
-<td><g:if test="${release.releasedAt}"><g:formatDate date="${release.releasedAt}" format="yyyy-MM-dd HH:mm"/></g:if><g:else>—</g:else></td>
+<td>${release.version?.encodeAsHTML()}</td>
+<td><g:if test="${release.dcnId}"><g:link controller="changeManagement" action="dcn" id="${release.dcnId}">${release.dcnNumber?.encodeAsHTML()}</g:link></g:if><g:else>${release.dcnNumber?.encodeAsHTML()}</g:else></td>
+<td><g:if test="${release.approvedAt}"><g:formatDate date="${release.approvedAt}" format="yyyy-MM-dd HH:mm"/></g:if><g:else>—</g:else></td>
+<td>${release.username?.encodeAsHTML()}</td>
 </tr>
 </g:each>
-<g:if test="${!dcnReleaseHistory}"><tr><td colspan="4">No DCN releases recorded for this part.</td></tr></g:if>
+<g:if test="${!dcnReleaseHistory}"><tr><td colspan="6">No released CAD versions or pending DCNs recorded for this part.</td></tr></g:if>
 </tbody>
 </table>
 </div>
+<style>
+/* The shared UI theme reorders/stylizes THEAD, producing a black strip and
+   moving headings below data. Keep this heading row inside TBODY so it is
+   always the first rendered row, with no empty THEAD strip. */
+.plm-dcn-history-table .plm-dcn-history-head { background:#e5eef6 !important; }
+.plm-dcn-history-table .plm-dcn-history-head th {
+    background:#e5eef6 !important;
+    color:#10253c !important;
+    text-align:left;
+    font-weight:700;
+    padding:10px 12px;
+    border-bottom:1px solid #c5d3df;
+}
+.plm-dcn-status {font-weight:700;}
+.plm-dcn-valid {color:#16803c;}
+.plm-dcn-draft {color:#b77900;}
+.plm-dcn-superseded {color:#687687;}
+</style>
 </div>
 </section>
 <section class="mat-card">

@@ -175,32 +175,91 @@ class PlmController {
             }
         }
 
-        // Query the optional Change Management module without a compile-time dependency.
+        // Build DCN history from CAD revisions first. A DcnPart association
+        // usually points to the active part, not its historical snapshot.
         List<Map> dcnReleaseHistory = []
+        List<PlmFreeCadPart> dcnRevisions = ([part] + (part.history ?: []).findAll { it != null }).unique { it.id }
+        List dcnLinks = []
+        Class dcnClass = null
         try {
             Class dcnPartClass = grailsApplication.classLoader.loadClass('changemanagement.DcnPart')
-            List revisions = ([part] + (part.history ?: []).findAll { it != null }).unique { it.id }
-            List links = dcnPartClass.findAllByPartInList(revisions)
-            links.each { link ->
-                if (link.dcn?.status?.toString() == 'RELEASED') {
-                    def versionPart = revisions.find { revision ->
-                        revision?.majorVersion == link.majorVersion &&
-                        revision?.minorVersion == link.minorVersion
-                    }
-                    dcnReleaseHistory << [
-                        dcnId: link.dcn.id,
-                        dcnNumber: link.dcn.dcnNumber?.toString(),
-                        version: "${link.majorVersion == null ? 1 : link.majorVersion}.${link.minorVersion == null ? 0 : link.minorVersion}",
-                        lom: versionPart?.lom?.toString() ?: '—',
-                        releasedAt: versionPart?.releasedAt
-                    ]
-                }
-            }
-            dcnReleaseHistory.sort { a, b ->
-                (b.releasedAt ?: new Date(0)) <=> (a.releasedAt ?: new Date(0))
-            }
+            dcnClass = grailsApplication.classLoader.loadClass('changemanagement.DesignChangeNotice')
+            dcnLinks = dcnPartClass.findAllByPartInList(dcnRevisions) ?: []
         } catch (ClassNotFoundException ignored) {
-            // Change Management module not installed.
+            // The optional Change Management module is not installed.
+        }
+
+        // Historical snapshots carry the lifecycle and DCN metadata at the
+        // moment of release. Include all RELEASED CAD versions, even if their
+        // Change Management association is missing or was later moved.
+        List<PlmFreeCadPart> releasedRevisions = dcnRevisions.findAll {
+            it.lifecycleState?.toString() == 'RELEASED'
+        }.sort { x, y ->
+            ((y.majorVersion ?: 1) <=> (x.majorVersion ?: 1)) ?:
+            ((y.minorVersion ?: 0) <=> (x.minorVersion ?: 0))
+        }
+        Set<String> recordedVersions = new LinkedHashSet<String>()
+        releasedRevisions.each { PlmFreeCadPart revision ->
+            Integer major = revision.majorVersion ?: 1
+            Integer minor = revision.minorVersion ?: 0
+            String version = "${major}.${minor}"
+            if (!recordedVersions.add(version)) return
+            def link = dcnLinks.find { l ->
+                l.majorVersion == major && l.minorVersion == minor &&
+                    l.dcn?.dcnNumber?.toString() == revision.dcn?.toString()
+            } ?: dcnLinks.find { l ->
+                l.majorVersion == major && l.minorVersion == minor
+            }
+            String number = revision.dcn?.toString()?.trim() ?: link?.dcn?.dcnNumber?.toString()
+            def notice = link?.dcn
+            if (number && dcnClass && notice?.dcnNumber?.toString() != number) {
+                notice = dcnClass.findByDcnNumber(number)
+            }
+            boolean approved = notice?.status?.toString() == 'RELEASED'
+            dcnReleaseHistory << [
+                status: approved ? 'Released' : 'Draft',
+                releasedDcn: approved,
+                lom: revision.lom?.toString() ?: '—',
+                version: version,
+                major: major,
+                minor: minor,
+                dcnId: notice?.id,
+                dcnNumber: number ?: '—',
+                approvedAt: approved ? revision.releasedAt : null,
+                username: (approved ? revision.releasedBy?.username : revision.userUpdated?.username) ?:
+                    revision.userCreated?.username ?: '—'
+            ]
+        }
+
+        // An unreleased DCN tracks the active part's *current* CAD version,
+        // even when the version has advanced since the DCN was assigned.
+        String currentNumber = part.dcn?.toString()?.trim()
+        def currentNotice = currentNumber && dcnClass ? dcnClass.findByDcnNumber(currentNumber) : null
+        if (currentNotice && currentNotice.status?.toString() in ['DRAFT', 'IN_REVIEW', 'APPROVED']) {
+            String currentVersion = "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}"
+            if (!recordedVersions.contains(currentVersion)) {
+                dcnReleaseHistory << [
+                    status: 'Draft', releasedDcn: false,
+                    lom: part.lom?.toString() ?: '—',
+                    version: currentVersion,
+                    major: part.majorVersion ?: 1, minor: part.minorVersion ?: 0,
+                    dcnId: currentNotice.id, dcnNumber: currentNumber,
+                    approvedAt: null,
+                    username: part.userUpdated?.username ?: part.userCreated?.username ?: '—'
+                ]
+            }
+        }
+
+        // Only the newest released CAD version with a RELEASED DCN is valid.
+        // Older approved releases are superseded. Pending DCNs remain Draft.
+        Map validRelease = dcnReleaseHistory.findAll { it.releasedDcn }.sort { x, y ->
+            (y.major <=> x.major) ?: (y.minor <=> x.minor)
+        }.find { true }
+        dcnReleaseHistory.each { row ->
+            if (row.releasedDcn) row.status = row.is(validRelease) ? 'Valid' : 'Superseded'
+        }
+        dcnReleaseHistory.sort { x, y ->
+            (y.major <=> x.major) ?: (y.minor <=> x.minor)
         }
 
         render(view: 'showPart', model: [
