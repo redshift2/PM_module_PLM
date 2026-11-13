@@ -274,6 +274,15 @@ class PlmFreeCadProtoService {
                         }
                     }
                     historical.creationOrder = nextOrder
+                    // The previous CAD version was checked out only while edits
+                    // were in progress. A successful check-in closes that checkout:
+                    // preserve the old version as WIP rather than CHECKED_OUT.
+                    // Do not alter snapshots that were already RELEASED.
+                    if (historical.lifecycleState == PlmPartLifecycleState.CHECKED_OUT) {
+                        historical.lifecycleState = PlmPartLifecycleState.WIP
+                        historical.checkedOutBy = null
+                        historical.checkedOutAt = null
+                    }
                     historical.userUpdated = user
                     historical.save(flush: true, failOnError: true)
                     // Create independent historical links; never reparent live links.
