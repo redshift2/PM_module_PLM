@@ -94,6 +94,88 @@ class PlmGeneratedAttachmentImportService {
         }
     }
 
+
+    /** Import declared drawing outputs, regardless of extension. Metadata and logs are never drawings. */
+    @Transactional
+    String importDrawingJobResult(Object job, Path resultZip) {
+        if (!job || !Files.isRegularFile(resultZip))
+            throw new IllegalArgumentException('Missing job or result archive')
+        Map parameters = (Map) new JsonSlurper().parseText(job.parametersJson ?: '{}')
+        Long partId = parsePartId(parameters.partId ?: parameters.entityId)
+        if (!partId) throw new IllegalArgumentException('Drawing job does not identify a PLM part')
+        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
+        if (!part) throw new IllegalArgumentException('PLM part not found: ' + partId)
+        if (part.active != true || part.nextVersion != null)
+            throw new IllegalStateException('Drawing job targets a historical CAD part')
+        Integer major = part.majorVersion ?: 1
+        Integer minor = part.minorVersion ?: 0
+        String version = "${major}.${minor}"
+        if (parameters.cadVersion != null && parameters.cadVersion.toString() != version)
+            throw new IllegalStateException('Drawing job targets a different CAD version')
+        if (parameters.cadMajorVersion != null && parameters.cadMajorVersion.toString() != major.toString())
+            throw new IllegalStateException('Drawing job targets a different CAD major version')
+        if (parameters.cadMinorVersion != null && parameters.cadMinorVersion.toString() != minor.toString())
+            throw new IllegalStateException('Drawing job targets a different CAD minor version')
+        if (parameters.cadSha1 != null &&
+            !parameters.cadSha1.toString().equalsIgnoreCase(part.plmContentShaOne ?: ''))
+            throw new IllegalStateException('Drawing job targets a different CAD file')
+        User actor = job.submittedBy ? User.findByUsername(job.submittedBy.toString()) : null
+        if (!actor) actor = part.userCreated
+        if (!actor) throw new IllegalStateException('No user available to own generated drawings')
+
+        ZipFile archive = new ZipFile(resultZip.toFile())
+        try {
+            def manifestEntry = archive.getEntry('drawing_result.json')
+            if (!manifestEntry || manifestEntry.directory || manifestEntry.size > 1024L * 1024L)
+                throw new IllegalArgumentException('Missing or oversized drawing_result.json')
+            byte[] metadataBytes = archive.getInputStream(manifestEntry).withCloseable { it.bytes }
+            if (metadataBytes.length > 1024 * 1024) throw new IllegalArgumentException('Drawing manifest too large')
+            def result = new JsonSlurper().parseText(new String(metadataBytes, 'UTF-8'))
+            if (!(result instanceof Map) || !(result.drawings instanceof List))
+                throw new IllegalArgumentException('Invalid drawing result manifest')
+            if (result.partId != null && result.partId.toString() != partId.toString())
+                throw new IllegalStateException('Drawing manifest targets a different part')
+            if (result.cadVersion != null && result.cadVersion.toString() != version)
+                throw new IllegalStateException('Drawing manifest targets a different CAD version')
+            if (result.cadSha1 != null &&
+                !result.cadSha1.toString().equalsIgnoreCase(part.plmContentShaOne ?: ''))
+                throw new IllegalStateException('Drawing manifest targets a different CAD file')
+            if (result.drawings.size() > 100) throw new IllegalArgumentException('Too many drawing files')
+            Set<String> names = new HashSet<>()
+            long totalBytes = 0L
+            int count = 0
+            for (def drawing : result.drawings) {
+                if (!(drawing instanceof Map) || !(drawing.file instanceof String))
+                    throw new IllegalArgumentException('Invalid drawing file entry')
+                String filename = drawing.file
+                if (!filename || filename.length() > 255 || filename in ['.', '..'] ||
+                    filename.contains('/') || filename.contains('\\') || !names.add(filename))
+                    throw new IllegalArgumentException('Unsafe or duplicate drawing filename')
+                def entry = archive.getEntry(filename)
+                if (!entry || entry.directory || entry.size > 100L * 1024L * 1024L)
+                    throw new IllegalArgumentException('Missing or oversized drawing: ' + filename)
+                byte[] content = archive.getInputStream(entry).withCloseable { it.bytes }
+                if (!content.length || content.length > 100L * 1024L * 1024L)
+                    throw new IllegalArgumentException('Invalid drawing content: ' + filename)
+                totalBytes += content.length
+                if (totalBytes > 250L * 1024L * 1024L)
+                    throw new IllegalArgumentException('Drawings exceed total size limit')
+                // Name generated files after the part, retaining page suffix and extension.
+                String partBase = (part.originalName ?: part.label ?: 'part')
+                    .replace('\\', '/').tokenize('/').last().replaceFirst(/(?i)\.FCStd$/, '')
+                    .replaceAll(/[\\\/:*?"<>|\r\n]/, '_')
+                String storedName = filename.replaceFirst(/(?i)^drawing(?=-|\.)/, java.util.regex.Matcher.quoteReplacement(partBase))
+                Attachment attachment = persistAttachment(storedName, content, actor)
+                plmCadVersionFileService.registerGeneratedDrawing(part.id as Long,
+                    attachment.id as Long, job.id?.toString(), major, minor)
+                count++
+            }
+            String message = count ? "${count} drawing(s) imported into PLM" : 'No drawing created'
+            log.info('DRAWINGS result part={} version={} job={} count={}', part.id, version, job.id, count)
+            return message
+        } finally { archive.close() }
+    }
+
     /**
      * Store the server-resolved assembly as an ASMJ engineering attachment.
      * CAD_TO_META uses a dedicated importer, so its result ZIP never passes

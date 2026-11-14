@@ -246,31 +246,23 @@
 </div>
 <div id="plm-tab-drawings" class="plm-tab-panel" hidden>
 <section class="mat-card">
-<div class="mat-card-head"><h2>Drawings — CAD Version ${plmPart.majorVersion ?: 1}.${plmPart.minorVersion == null ? 0 : plmPart.minorVersion}</h2></div>
+<div class="mat-card-head"><h2>Drawings</h2></div>
 <div class="mat-card-body">
-<p>Drawings inherit this CAD version's lifecycle state: <strong>${plmPart.lifecycleState?.toString()?.encodeAsHTML()}</strong>.</p>
-<g:if test="${drawingVersions?.size() > 1}">
-<label for="plmDrawingVersion">CAD version:</label>
-<select id="plmDrawingVersion" aria-label="Select drawing CAD version" onchange="if(this.value) window.location.href=this.value">
-<g:each in="${drawingVersions}" var="dv">
-<option value="${createLink(controller:'plm',action:'showPart',id:dv.id)}#plm-tab-drawings" ${dv.id == plmPart.id ? 'selected="selected"' : ''}>v${dv.version?.encodeAsHTML()} — ${dv.lifecycle?.encodeAsHTML()}</option>
-</g:each>
-</select>
-</g:if>
 <g:if test="${managedDrawings}">
-<div class="mat-table-wrap"><table><thead><tr><th>Drawing</th><th>Added</th><th>Action</th></tr></thead><tbody>
+<div class="mat-table-wrap"><table><thead><tr><th>Drawing</th><th>Version</th><th>Date</th><th>Actions</th></tr></thead><tbody>
 <g:each in="${managedDrawings}" var="drawing">
-<tr><td>${drawing.name?.encodeAsHTML()}</td><td><g:formatDate date="${drawing.created}" format="yyyy-MM-dd HH:mm"/></td>
-<td><g:link controller="plmManagedFile" action="download" id="${drawing.id}" class="mat-btn">Download</g:link>
-<g:if test="${drawing.name?.toLowerCase()?.endsWith('.pdf')}"><g:link controller="plmManagedFile" action="previewPdf" id="${drawing.id}" target="_blank" rel="noopener" class="mat-btn">Preview PDF</g:link></g:if>
-<g:if test="${canUploadDrawing}">
-<form action="${createLink(controller:'plmManagedFile',action:'removeDrawing',id:drawing.id)}" method="post" style="display:inline" onsubmit="return confirm('Remove this drawing from the current CAD version? The original attachment will be retained.');">
+<tr><td>${drawing.name?.encodeAsHTML()}</td><td>v${drawing.version?.encodeAsHTML()}</td>
+<td><g:formatDate date="${drawing.created}" format="yyyy-MM-dd HH:mm"/></td>
+<td><g:link controller="plmManagedFile" action="viewDrawing" id="${drawing.id}" target="_blank" rel="noopener" class="mat-btn">View</g:link>
+<g:link controller="plmManagedFile" action="download" id="${drawing.id}" class="mat-btn">Download</g:link>
+<g:if test="${canUploadDrawing && drawing.removable}">
+<form action="${createLink(controller:'plmManagedFile',action:'removeDrawing',id:drawing.id)}" method="post" style="display:inline" onsubmit="return confirm('Remove this drawing? The original attachment will be retained.');">
 <button type="submit" class="mat-btn">Remove</button></form>
 </g:if></td></tr>
 </g:each>
 </tbody></table></div>
 </g:if>
-<g:else><p>No managed drawings are registered for this CAD version yet. Existing legacy attachments are still available under Attachments.</p></g:else>
+<g:else><p>No managed drawings are registered for this part yet.</p></g:else>
 <g:if test="${canUploadDrawing}">
 <form action="${createLink(controller:'plmManagedFile',action:'uploadDrawing')}" method="post" enctype="multipart/form-data" style="margin-top:16px">
 <input type="hidden" name="partId" value="${plmPart.id}"/>

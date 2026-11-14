@@ -170,6 +170,32 @@ class PlmManagedFileController {
         redirect(controller: 'plm', action: 'showPart', id: part.id, fragment: 'plm-tab-drawings')
     }
 
+    /** Safe inline drawing viewer for PDF and SVG. Other formats download instead. */
+    def viewDrawing(Long id) {
+        PlmCadVersionFile record = id == null ? null : PlmCadVersionFile.get(id)
+        if (!record || record.fileType != 'DRAWING' ||
+            !plmFreeCadSecurityService.canDownloadFile(record.part)) {
+            response.sendError(404); return
+        }
+        Path store = Path.of(taackAttachmentService.storePath).toAbsolutePath().normalize()
+        Path target = store.resolve(record.attachment?.filePath ?: '').normalize()
+        if (!target.startsWith(store) || !Files.isRegularFile(target) || Files.isSymbolicLink(target)) {
+            response.sendError(404); return
+        }
+        String name = record.originalName?.toLowerCase(java.util.Locale.ROOT) ?: ''
+        if (!(name.endsWith('.pdf') || name.endsWith('.svg'))) {
+            redirect(action: 'download', id: id); return
+        }
+        response.contentType = name.endsWith('.pdf') ? 'application/pdf' : 'image/svg+xml'
+        response.setHeader('Content-Disposition', 'inline')
+        response.setHeader('X-Content-Type-Options', 'nosniff')
+        response.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
+        response.setHeader('Cache-Control', 'private, no-store')
+        response.setContentLengthLong(Files.size(target))
+        Files.newInputStream(target).withCloseable { input -> response.outputStream << input }
+        response.outputStream.flush()
+    }
+
     /** Authenticated inline PDF preview. SVG stays download-only to avoid active-content execution. */
     def previewPdf(Long id) {
         PlmCadVersionFile record = id == null ? null : PlmCadVersionFile.get(id)

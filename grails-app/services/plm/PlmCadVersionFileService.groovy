@@ -59,6 +59,25 @@ class PlmCadVersionFileService {
         registered
     }
 
+
+    /** Worker-generated drawings may arrive after release; they never alter CAD content. */
+    PlmCadVersionFile registerGeneratedDrawing(Long partId, Long attachmentId,
+                                                String jobId, Integer major, Integer minor) {
+        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
+        Attachment attachment = Attachment.get(attachmentId)
+        if (!part || !attachment) throw new IllegalArgumentException('Unknown part or attachment')
+        if (part.active != true || part.nextVersion != null ||
+            (part.majorVersion ?: 1) != major || (part.minorVersion ?: 0) != minor)
+            throw new IllegalStateException('Drawing result targets a different CAD version')
+        PlmCadVersionFile existing = PlmCadVersionFile.findByPartAndAttachmentAndCadMajorVersionAndCadMinorVersionAndFileType(
+            part, attachment, major, minor, 'DRAWING')
+        if (existing) return existing
+        new PlmCadVersionFile(part: part, attachment: attachment,
+            cadMajorVersion: major, cadMinorVersion: minor, fileType: 'DRAWING',
+            originalName: attachment.originalName, contentShaOne: attachment.contentShaOne,
+            generatedByJobId: jobId).save(failOnError: true, flush: true)
+    }
+
     /** Read files for a specific CAD version, including historical versions. */
     @Transactional(readOnly = true)
     List<PlmCadVersionFile> listForVersion(Long partId, Integer major, Integer minor,

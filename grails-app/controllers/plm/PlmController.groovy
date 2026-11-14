@@ -263,8 +263,30 @@ class PlmController {
             (y.major <=> x.major) ?: (y.minor <=> x.minor)
         }
 
+        // Show drawings from every CAD revision in one table (no version filter).
+        List<PlmFreeCadPart> drawingParts = ([part] + (part.history ?: []).findAll { it != null })
+            .unique { it.id }
+        List<Map> managedDrawings = drawingParts.collectMany { revision ->
+            Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
+            Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
+            plmCadVersionFileService.listForVersion(revision.id as Long, major, minor, 'DRAWING').collect { f ->
+                String name = f.originalName ?: 'drawing'
+                String base = (revision.originalName ?: revision.label ?: part.originalName ?: part.label ?: 'part')
+                    .replace('\\', '/').tokenize('/').last().replaceFirst(/(?i)\.FCStd$/, '')
+                base = base.replaceAll(/[\\\/:*?"<>|\r\n]/, '_')
+                if (name ==~ /(?i)^drawing-.*$/) name = base + name.substring('drawing'.length())
+                [id: f.id, name: name, created: f.dateCreated, version: "${major}.${minor}",
+                 removable: revision.id == part.id]
+            }
+        }.sort { aRow, bRow -> (bRow.created ?: new Date(0)) <=> (aRow.created ?: new Date(0)) }
+        boolean canUploadDrawing = part.active == true && part.nextVersion == null &&
+            part.lifecycleState?.toString() == 'CHECKED_OUT' &&
+            plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
+
         render(view: 'showPart', model: [
-            part: part, components: components, extractedBom: extractedBom, cadHistory: cadHistory, attachments: attachments,
+            part: part, plmPart: part, managedDrawings: managedDrawings,
+            canUploadDrawing: canUploadDrawing,
+            components: components, extractedBom: extractedBom, cadHistory: cadHistory, attachments: attachments,
             dcnReleaseHistory: dcnReleaseHistory,
             previewAvailable: plmPreviewStorageService.modelFile(part).isFile() || plmPreviewStorageService.x3dFile(part).isFile(),
             previewGlbAvailable: plmPreviewStorageService.modelFile(part).isFile(),
