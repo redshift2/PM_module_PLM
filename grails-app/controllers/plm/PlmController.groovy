@@ -263,22 +263,28 @@ class PlmController {
             (y.major <=> x.major) ?: (y.minor <=> x.minor)
         }
 
-        // Show drawings from every CAD revision in one table (no version filter).
+        // Query every registry record belonging to this part's revision family.
+        // Do not filter on the registry owner's current CAD version: after check-in
+        // that owner may be historical while its drawings must remain visible.
         List<PlmFreeCadPart> drawingParts = ([part] + (part.history ?: []).findAll { it != null })
             .unique { it.id }
-        List<Map> managedDrawings = drawingParts.collectMany { revision ->
-            Integer major = revision.majorVersion == null ? 1 : revision.majorVersion
-            Integer minor = revision.minorVersion == null ? 0 : revision.minorVersion
-            plmCadVersionFileService.listForVersion(revision.id as Long, major, minor, 'DRAWING').collect { f ->
-                String name = f.originalName ?: 'drawing'
-                String base = (revision.originalName ?: revision.label ?: part.originalName ?: part.label ?: 'part')
-                    .replace('\\', '/').tokenize('/').last().replaceFirst(/(?i)\.FCStd$/, '')
-                base = base.replaceAll(/[\\\/:*?"<>|\r\n]/, '_')
-                if (name ==~ /(?i)^drawing-.*$/) name = base + name.substring('drawing'.length())
-                [id: f.id, name: name, created: f.dateCreated, version: "${major}.${minor}",
-                 removable: revision.id == part.id]
-            }
-        }.sort { aRow, bRow -> (bRow.created ?: new Date(0)) <=> (aRow.created ?: new Date(0)) }
+        List<Long> drawingPartIds = drawingParts.collect { it.id as Long }
+        List<PlmCadVersionFile> drawingRecords = drawingPartIds ?
+            PlmCadVersionFile.executeQuery('''
+                SELECT f FROM PlmCadVersionFile f
+                WHERE f.part.id IN (:partIds) AND f.fileType = :type
+                ORDER BY f.dateCreated DESC, f.id DESC
+            ''', [partIds: drawingPartIds, type: 'DRAWING']) : []
+        List<Map> managedDrawings = drawingRecords.collect { f ->
+            String name = f.originalName ?: 'drawing'
+            String base = (part.originalName ?: part.label ?: 'part')
+                .replace('\\', '/').tokenize('/').last().replaceFirst(/(?i)\.FCStd$/, '')
+            base = base.replaceAll(/[\\\/:*?"<>|\r\n]/, '_')
+            if (name ==~ /(?i)^drawing-.*$/) name = base + name.substring('drawing'.length())
+            [id: f.id, name: name, created: f.dateCreated,
+             version: "${f.cadMajorVersion}.${f.cadMinorVersion}",
+             removable: f.part?.id == part.id]
+        }
         boolean canUploadDrawing = part.active == true && part.nextVersion == null &&
             part.lifecycleState?.toString() == 'CHECKED_OUT' &&
             plmFreeCadSecurityService.canUploadPart(part, springSecurityService.currentUser as User)
