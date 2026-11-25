@@ -165,6 +165,10 @@ class PlmController {
                 // Legacy 3D previews are stored outside the managed-file registry.
                 // Check the exact historical revision's preview path, not the latest part.
                 previewGlbRevisionId: (!glbFile && legacyGlb.isFile()) ? revision.id : null,
+                exchangeFiles: versionFiles.findAll { it.fileType == 'EXCHANGE' }.sort { a, b -> (a.originalName ?: '') <=> (b.originalName ?: '') }.collect { f ->
+                    [id: f.id, name: f.originalName, format: (f.originalName?.tokenize('.')?.last() ?: '3D').toUpperCase(java.util.Locale.ROOT)]
+                },
+                canUploadExchange: major == (part.majorVersion ?: 1) && minor == (part.minorVersion ?: 0) && part.active == true && part.nextVersion == null && part.lifecycleState?.toString() == 'CHECKED_OUT',
                 asmjFileId: asmjFile?.id
             ])
         }

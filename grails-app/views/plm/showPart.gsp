@@ -369,6 +369,18 @@
     <g:elseif test="${historyRow.previewGlbRevisionId != null}">
       <g:link controller="plm" action="downloadHistoryPreviewGlb" id="${plmPart.id}" params="${[revisionId: historyRow.previewGlbRevisionId]}" class="mat-btn">GLB</g:link>
     </g:elseif>
+    <g:each in="${historyRow.exchangeFiles}" var="exchangeFile">
+      <g:link controller="plmManagedFile" action="download" id="${exchangeFile.id}" class="mat-btn" title="${exchangeFile.name?.encodeAsHTML()}">${exchangeFile.format?.encodeAsHTML()}</g:link>
+    </g:each>
+    <g:if test="${historyRow.canUploadExchange}">
+      <form method="post" enctype="multipart/form-data" action="${createLink(controller:'plmManagedFile',action:'upload3d')}" style="display:inline-flex;align-items:center;gap:4px">
+        <input type="hidden" name="partId" value="${plmPart.id}"/>
+        <input type="hidden" name="major" value="${historyRow.version?.tokenize('.')?.getAt(0)}"/>
+        <input type="hidden" name="minor" value="${historyRow.version?.tokenize('.')?.getAt(1)}"/>
+        <input type="file" name="model" required style="max-width:185px" aria-label="Select 3D file"/>
+        <button type="submit" class="mat-btn">Upload 3D</button>
+      </form>
+    </g:if>
     <g:if test="${historyRow.asmjFileId != null}">
       <g:link controller="plmManagedFile" action="download" id="${historyRow.asmjFileId}" class="mat-btn">ASMJ</g:link>
     </g:if>

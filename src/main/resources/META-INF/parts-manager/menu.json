@@ -1,0 +1,29 @@
+{
+  "id": "plm",
+  "label": "PLM",
+  "controller": "plm",
+  "action": "parts",
+  "icon": "plm/plm.svg",
+  "order": 30,
+  "roles": [
+    "ROLE_PLM_USER",
+    "ROLE_ADMIN"
+  ],
+  "menuItems": [
+    {
+      "label": "Parts",
+      "action": "parts",
+      "order": 10
+    },
+    {
+      "label": "Parent Parts",
+      "action": "parentParts",
+      "order": 20
+    },
+    {
+      "label": "Obsolete",
+      "action": "obsoleteParts",
+      "order": 30
+    }
+  ]
+}

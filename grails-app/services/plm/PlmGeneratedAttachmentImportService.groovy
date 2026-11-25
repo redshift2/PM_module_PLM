@@ -233,7 +233,7 @@ class PlmGeneratedAttachmentImportService {
         Long.valueOf(value.toString())
     }
 
-    private Attachment persistAttachment(String filename, byte[] content, User actor) {
+    Attachment persistAttachment(String filename, byte[] content, User actor) {
         String sha = MessageDigest.getInstance('SHA-1').digest(content).encodeHex().toString()
         Attachment existing = Attachment.findByContentShaOneAndOriginalName(sha, filename)
         if (existing) return existing

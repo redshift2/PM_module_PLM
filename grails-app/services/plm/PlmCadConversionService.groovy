@@ -58,30 +58,65 @@ class PlmCadConversionService {
         } finally { Files.deleteIfExists(tmp) }
     }
 
-    /** Import either preview format using the same revision verification and storage. */
+    PlmGeneratedAttachmentImportService plmGeneratedAttachmentImportService
+    PlmCadVersionFileService plmCadVersionFileService
+
+    /** Import event-generated CAD representations without filtering on job type. */
     @Transactional
-    void importWorkerResult(Object job, Path resultZip) {
-        if (!(job.jobType in ['CAD_TO_GLB', 'CAD_TO_X3D'])) return
+    String importWorkerResult(Object job, Path resultZip) {
+        if (!job || !Files.isRegularFile(resultZip))
+            throw new IllegalArgumentException('Missing CAD History result ZIP')
         Map metadata = (Map)new JsonSlurper().parseText(job.parametersJson ?: '{}')
-        if (!metadata.partId || !metadata.cadVersion || !metadata.cadSha1)
-            throw new IllegalArgumentException('Missing CAD revision metadata in worker job')
+        if (!metadata.partId || !metadata.cadVersion || metadata.eventId == null)
+            throw new IllegalArgumentException('CAD History routing requires event part, version and event ID')
+        String version = metadata.cadVersion.toString()
+        if (!(version ==~ /[0-9]+\.[0-9]+/)) throw new IllegalArgumentException('Invalid event CAD version')
+        List<Integer> numbers = version.split(/\./).collect { Integer.valueOf(it) }
         Long partId = Long.valueOf(metadata.partId.toString())
         PlmFreeCadPart part = PlmFreeCadPart.get(partId)
-        if (!part || "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" != metadata.cadVersion ||
-            part.plmContentShaOne != metadata.cadSha1)
-            throw new IllegalStateException('CAD result revision does not match current part')
-        boolean x3d = job.jobType == 'CAD_TO_X3D'
-        String filename = x3d ? 'model.x3d' : 'model.glb'
-        long minSize = x3d ? 10L : 12L
-        ZipFile zip = new ZipFile(resultZip.toFile())
+        if (!part) throw new IllegalArgumentException('Event PLM part not found: ' + partId)
+        def actor = job.submittedBy ? crew.User.findByUsername(job.submittedBy.toString()) : null
+        if (!actor) actor = part.userCreated
+        if (!actor) throw new IllegalStateException('No owner for generated CAD files')
+        int count = 0
+        long total = 0L
+        ZipFile archive = new ZipFile(resultZip.toFile())
         try {
-            ZipEntry entry = zip.getEntry(filename)
-            if (!entry || entry.directory || entry.size < minSize || entry.size > 250L*1024L*1024L)
-                throw new IllegalArgumentException('Worker result does not contain valid ' + filename)
-            zip.getInputStream(entry).withCloseable { stream ->
-                if (x3d) plmPreviewStorageService.storeX3d(part, stream, entry.size, filename)
-                else plmPreviewStorageService.store(part, stream, entry.size, filename)
+            def entries = archive.entries()
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement()
+                if (entry.directory) continue
+                String name = entry.name
+                if (!name || name.startsWith('/') || name.startsWith('\\') ||
+                    name.contains('\\') || name.split('/').contains('..'))
+                    throw new IllegalArgumentException('Unsafe result path: ' + name)
+                String filename = name.tokenize('/').last()
+                String lower = filename.toLowerCase(java.util.Locale.ROOT)
+                // Do not attach job metadata, logs, or reports as CAD models.
+                if (lower in ['manifest.json', 'conversion.json', 'drawing_result.json',
+                              'assembly_report.json', 'execution.log', 'step_import_result.json']) continue
+                if (!(lower ==~ /.*\.[a-z0-9][a-z0-9_+-]{0,15}/)) continue
+                String ext = lower.substring(lower.lastIndexOf('.') + 1)
+                if (ext in ['json', 'log', 'txt', 'csv', 'png', 'jpg', 'jpeg', 'pdf', 'svg', 'xml', 'html', 'py']) continue
+                if (++count > 100) throw new IllegalArgumentException('Too many CAD result files')
+                if (entry.size > 250L * 1024 * 1024) throw new IllegalArgumentException('CAD result file too large: ' + filename)
+                byte[] bytes = archive.getInputStream(entry).withCloseable { it.bytes }
+                total += bytes.length
+                if (!bytes.length || total > 500L * 1024 * 1024)
+                    throw new IllegalArgumentException('Empty or oversized CAD result ZIP')
+                def attachment = plmGeneratedAttachmentImportService.persistAttachment(filename, bytes, actor)
+                plmCadVersionFileService.registerEventOutput(partId, attachment.id as Long,
+                    ext == 'glb' ? 'GLB' : 'EXCHANGE', job.id?.toString(), numbers[0], numbers[1])
+                // Preserve existing GLB preview for the current revision only.
+                if (ext == 'glb' && version == "${part.majorVersion ?: 1}.${part.minorVersion ?: 0}" &&
+                    (metadata.cadSha1 == null || metadata.cadSha1.toString().equalsIgnoreCase(part.plmContentShaOne ?: ''))) {
+                    new ByteArrayInputStream(bytes).withCloseable { stream ->
+                        plmPreviewStorageService.store(part, stream, bytes.length, filename)
+                    }
+                }
             }
-        } finally { zip.close() }
+        } finally { archive.close() }
+        if (!count) throw new IllegalArgumentException('CAD History result ZIP contains no model files')
+        return "Imported ${count} CAD History file(s) for part ${partId} v${version}"
     }
 }

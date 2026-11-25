@@ -54,6 +54,78 @@ class PlmManagedFileController {
             }])
     }
 
+    /** Attach an arbitrary 3D exchange file to the current checked-out CAD version.
+     * The native CAD revision and lifecycle are never changed.
+     */
+    @Transactional
+    def upload3d() {
+        if (!request.method.equalsIgnoreCase('POST')) { response.sendError(405); return }
+        Long partId = params.long('partId')
+        PlmFreeCadPart part = partId == null ? null : PlmFreeCadPart.get(partId)
+        User actor = springSecurityService.currentUser as User
+        if (!part || !plmFreeCadSecurityService.canDownloadFile(part)) { response.sendError(404); return }
+        Integer major = params.int('major'), minor = params.int('minor')
+        if (part.active != true || part.nextVersion != null ||
+            part.lifecycleState?.toString() != 'CHECKED_OUT' ||
+            !plmFreeCadSecurityService.canUploadPart(part, actor) ||
+            major != (part.majorVersion ?: 1) || minor != (part.minorVersion ?: 0)) {
+            response.sendError(403, 'Only the checkout owner can attach files to the current CAD version'); return
+        }
+        MultipartFile upload = request.getFile('model')
+        if (upload == null || upload.empty) { response.sendError(400, 'Select a 3D file'); return }
+        String filename = upload.originalFilename?.replace('\\', '/')?.tokenize('/')?.last()
+        if (!filename || filename.length() > 255 || filename.startsWith('.') ||
+            filename.contains('..') || !(filename ==~ /(?i)[a-z0-9][a-z0-9 _().-]*\.[a-z0-9]{1,16}/)) {
+            response.sendError(400, 'Invalid 3D filename'); return
+        }
+        // Accept any 3D extension, rather than maintaining a restrictive whitelist.
+        // Uploaded files are always downloaded as attachments, never served inline.
+        Path store = Path.of(taackAttachmentService.storePath).toAbsolutePath().normalize()
+        Files.createDirectories(store)
+        Path temp = Files.createTempFile(store, 'plm-3d-', '.tmp')
+        try {
+            MessageDigest digest = MessageDigest.getInstance('SHA-1')
+            long count = 0L
+            upload.inputStream.withCloseable { input ->
+                Files.newOutputStream(temp).withCloseable { output ->
+                    byte[] buffer = new byte[65536]
+                    int n
+                    while ((n = input.read(buffer)) != -1) {
+                        count += n
+                        if (count > 2L * 1024L * 1024L * 1024L)
+                            throw new IllegalArgumentException('3D file exceeds 2 GB')
+                        digest.update(buffer, 0, n)
+                        output.write(buffer, 0, n)
+                    }
+                }
+            }
+            if (count == 0) { response.sendError(400, 'Empty file'); return }
+            String sha = digest.digest().encodeHex().toString()
+            String ext = filename.tokenize('.').last().toLowerCase(java.util.Locale.ROOT)
+            Path target = store.resolve(sha + '.' + ext)
+            if (!Files.isRegularFile(target)) Files.move(temp, target)
+            Attachment attachment = Attachment.findByContentShaOneAndOriginalName(sha, filename)
+            if (!attachment) {
+                String mime = 'application/octet-stream'
+                attachment = new Attachment(
+                    filePath: target.fileName.toString(), originalName: filename,
+                    contentShaOne: sha, fileSize: count, contentType: mime,
+                    contentTypeEnum: AttachmentContentType.fromMimeType(mime),
+                    contentTypeCategoryEnum: AttachmentContentTypeCategory.DOCUMENT,
+                    userCreated: actor, userUpdated: actor,
+                    documentCategory: DocumentCategory.findOrCreateByCategory(DocumentCategoryEnum.OTHER),
+                    documentAccess: DocumentAccess.findOrCreateByIsInternalAndIsRestrictedToMyBusinessUnitAndIsRestrictedToMySubsidiaryAndIsRestrictedToMyManagersAndIsRestrictedToEmbeddingObjects(false, false, false, false, true)
+                ).save(failOnError: true, flush: true)
+            }
+            plmCadVersionFileService.register(part.id as Long, attachment.id as Long, 'EXCHANGE')
+            log.info('PLM 3D FILE ADD part={} version={}.{} attachment={} actor={} filename={}',
+                part.id, major, minor, attachment.id, actor?.id, filename)
+        } catch (IllegalArgumentException e) {
+            response.sendError(400, e.message); return
+        } finally { Files.deleteIfExists(temp) }
+        redirect(controller: 'plm', action: 'showPart', id: part.id, fragment: 'plm-tab-history')
+    }
+
     /** POST /plmManagedFile/uploadDrawing — only checkout owner can add drawings. */
     @Transactional
     def uploadDrawing() {

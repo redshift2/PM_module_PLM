@@ -22,7 +22,7 @@ class PlmCadVersionFile {
         attachment nullable: false
         cadMajorVersion min: 1
         cadMinorVersion min: 0
-        fileType inList: ['CAD', 'DRAWING', 'GLB', 'ASSEMBLY']
+        fileType inList: ['CAD', 'DRAWING', 'GLB', 'ASSEMBLY', 'EXCHANGE']
         originalName blank: false, maxSize: 512
         contentShaOne nullable: true, maxSize: 40
         generatedByJobId nullable: true, maxSize: 128

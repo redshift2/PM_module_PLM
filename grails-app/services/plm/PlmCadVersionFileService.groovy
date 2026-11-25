@@ -6,7 +6,7 @@ import grails.gorm.transactions.Transactional
 /** Version-specific file registry. No independent drawing release/version state. */
 @Transactional
 class PlmCadVersionFileService {
-    static final Set<String> TYPES = ['CAD', 'DRAWING', 'GLB', 'ASSEMBLY'] as Set
+    static final Set<String> TYPES = ['CAD', 'DRAWING', 'GLB', 'ASSEMBLY', 'EXCHANGE'] as Set
 
     /** Register an already-stored Attachment without overwriting any prior association.
      * Only current WIP/checked-out engineering versions accept ordinary changes.
@@ -74,6 +74,23 @@ class PlmCadVersionFileService {
         if (existing) return existing
         new PlmCadVersionFile(part: part, attachment: attachment,
             cadMajorVersion: major, cadMinorVersion: minor, fileType: 'DRAWING',
+            originalName: attachment.originalName, contentShaOne: attachment.contentShaOne,
+            generatedByJobId: jobId).save(failOnError: true, flush: true)
+    }
+
+    /** Generated representations are attached to the exact event revision, including RELEASED revisions. */
+    PlmCadVersionFile registerEventOutput(Long partId, Long attachmentId, String type,
+                                          String jobId, Integer major, Integer minor) {
+        PlmFreeCadPart part = PlmFreeCadPart.get(partId)
+        Attachment attachment = Attachment.get(attachmentId)
+        if (!part || !attachment || major == null || minor == null)
+            throw new IllegalArgumentException('Missing CAD History destination')
+        if (!(type in ['GLB', 'EXCHANGE'])) throw new IllegalArgumentException('Unsupported generated format')
+        PlmCadVersionFile existing = PlmCadVersionFile.findByPartAndAttachmentAndCadMajorVersionAndCadMinorVersionAndFileType(
+            part, attachment, major, minor, type)
+        if (existing) return existing
+        new PlmCadVersionFile(part: part, attachment: attachment,
+            cadMajorVersion: major, cadMinorVersion: minor, fileType: type,
             originalName: attachment.originalName, contentShaOne: attachment.contentShaOne,
             generatedByJobId: jobId).save(failOnError: true, flush: true)
     }
